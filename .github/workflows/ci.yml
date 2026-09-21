@@ -58,6 +58,43 @@ jobs:
             python -m py_compile "$d"/scripts/*.py
           done
 
+      # ── 这一步存在的理由 ──────────────────────────────────────────────
+      # CI 里没有 Zotero，所以「真发请求」的代码路径一行都跑不到，编译与 import 全绿
+      # 也说明不了它是通的。2026-09-21 漏过一次：zapi 把模块级 SID/KEY 改成惰性
+      # `_sid()` / `_key()` 之后，intake_pdfs 里还留着 `zapi.SID`——编译、import、
+      # 两个平台的冒烟全过，到真机收编 PDF 时才炸。这步用 AST 把这类引用找出来。
+      - name: 静态检查 zapi 的引用（补上「连不上 Zotero」那段盲区）
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+
+          def module_names(path):
+              tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
+              names = {n.name for n in tree.body
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+              for n in tree.body:
+                  if isinstance(n, ast.Assign):
+                      names |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+              return names
+
+          have = module_names("linux/scripts/zapi.py")
+          bad, n = [], 0
+          for d in ("linux/scripts", "windows/scripts"):
+              for f in sorted(pathlib.Path(d).glob("*.py")):
+                  n += 1
+                  for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+                      if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                              and node.value.id == "zapi" and node.attr not in have):
+                          bad.append(f"{f}:{node.lineno}  zapi.{node.attr}")
+
+          if bad:
+              print("❌ 引用了 zapi.py 里不存在的名字：")
+              print("\n".join("   " + b for b in bad))
+              sys.exit(1)
+          print(f"✅ {n} 个文件、zapi 共 {len(have)} 个模块级名字，引用全部有定义")
+          PY
+
       # ── 本 workflow 存在的理由 ────────────────────────────────────────
       # 断言的写法有意与 locale 默认编码**解耦**：
       # 比的是「落盘的字节」与「读回来的内容」，而不是比两边的字符串是否都「看着对」——

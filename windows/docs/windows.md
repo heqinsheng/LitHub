@@ -204,8 +204,9 @@ curl -s -X POST http://127.0.0.1:23119/api/local/authorize \
 (Get-Item state\zotero_local_key).Length      # 非 0 即可，形如 04cB9QTKO9UNhf1umsHgcYZBEsrunZ9J
 ```
 
-> ⚠️ **`state\zotero_local_key` 必须在跑任何脚本之前就存在**：`scripts/zapi.py` 在 **import 时**
-> 就读它，连只读脚本也不例外。
+> ⚠️ **`state\zotero_local_key` 要在会连 Zotero 的脚本跑起来之前就存在**：`scripts/zapi.py`
+> 的 `_key()` 在**第一次真发请求时**才读它——只 import 不碰，所以 CI 里编译得动；
+> 缺了它真发请求就会报错。
 >
 > ⚠️ 用 PowerShell 的 `>` 重定向写这个文件会带上 UTF-16/BOM 或末尾换行，key 就脏了——
 > 用上面那句 `[IO.File]::WriteAllText`。

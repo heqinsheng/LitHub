@@ -47,7 +47,7 @@ mv ~/lithub-src/windows ~/LitHub     # Windows 用户（含 WSL2）
 | **一个 LLM CLI**        | 写中文总结、挑配图                      | 默认调 `~/.kimi-code/bin/kimi`，用环境变量 `LITHUB_KIMI` 换路径              |
 | **MinerU API token**  | PDF → Markdown（保公式 / 表格 / 图）   | `mineru-open-api auth`；免费额度够个人用                                  |
 
-> summarize_batch.py` 用的是 kimi 风格的参数
+> `summarize_batch.py` 用的是 kimi 风格的参数
 > （`-p`、`--agent-file=`、`--output-format stream-json`，以及环境变量
 > `KIMI_LOOP_MAX_STEPS_PER_TURN`）。换别的 CLI 得确认这几个对得上，否则会退化成
 > 「模型自己读文件」的老路径（每篇贵一倍多，见 `帮助手册.md` §6.5）。

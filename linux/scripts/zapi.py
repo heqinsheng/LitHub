@@ -66,7 +66,14 @@ def _key():
     return _key_cache
 
 
-def _hdr(write=False):
+def hdr(write=False):
+    """请求头。`write=True` 时带上授权密钥（这时候才会去读 `state/zotero_local_key`）。
+
+    公开而不是私有，是因为 PDF 三段式上传（`intake_pdfs.py`）要换掉 `Content-Type`
+    再发：它应当在这个基础上改，而不是自己拼 `Zotero-Server-ID` / `Authorization`——
+    手拼的那份在 2026-09-21 漏改过一次（zapi 换成惰性 `_sid()` / `_key()` 之后它没跟上，
+    编译与 import 全绿、到真机收编 PDF 才炸）。
+    """
     h = {"Zotero-API-Version": "3", "Zotero-Server-ID": _sid()}
     if write:
         h["Authorization"] = f"Bearer {_key()}"
@@ -94,7 +101,7 @@ def _hget(headers, name, default=None):
 def get(path, **params):
     q = _q(params)
     url = f"{API}/{path}" + (f"?{q}" if q else "")
-    with urllib.request.urlopen(urllib.request.Request(url, headers=_hdr()), timeout=60) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=hdr()), timeout=60) as r:
         return json.loads(r.read()), dict(r.headers)
 
 
@@ -118,7 +125,7 @@ def get_all(path, **params):
 
 
 def write(method, path, body=None, version=None):
-    h = _hdr(write=True)
+    h = hdr(write=True)
     if version is not None:
         h["If-Unmodified-Since-Version"] = str(version)
     req = urllib.request.Request(

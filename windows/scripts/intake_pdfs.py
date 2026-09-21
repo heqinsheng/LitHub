@@ -176,10 +176,9 @@ def upload_file(akey, path):
     # --- 1) 请求上传授权 ---
     body = urllib.parse.urlencode({"md5": md5, "filename": fn,
                                    "filesize": len(data), "mtime": mtime}).encode()
-    h = {"Zotero-API-Version": "3", "Zotero-Server-ID": zapi.SID,
-         "Authorization": f"Bearer {zapi.KEY}",
-         "Content-Type": "application/x-www-form-urlencoded",
-         "If-None-Match": "*"}
+    h = zapi.hdr(write=True)
+    h["Content-Type"] = "application/x-www-form-urlencoded"
+    h["If-None-Match"] = "*"
     req = urllib.request.Request(f"{zapi.API}/items/{akey}/file", data=body,
                                  method="POST", headers=h)
     try:
@@ -197,8 +196,8 @@ def upload_file(akey, path):
     ukey = auth["uploadKey"]
 
     # --- 2) 上传字节 ---
-    h2 = {"Content-Type": ctype, "Zotero-API-Version": "3",
-          "Zotero-Server-ID": zapi.SID, "Authorization": f"Bearer {zapi.KEY}"}
+    h2 = zapi.hdr(write=True)
+    h2["Content-Type"] = ctype
     req2 = urllib.request.Request(url, data=prefix + data + suffix,
                                   method="POST", headers=h2)
     try:

@@ -236,7 +236,8 @@ def check_keyfile(results):
     else:
         results.append(("bad", "缺少写入授权密钥", [
             f"{KEYFILE}",
-            "scripts/zapi.py 在 **import 时**就打开它——缺文件连只读脚本都跑不起来。",
+            "scripts/zapi.py 的 _key() 在**第一次真发请求时**才读它——只 import 不受影响，",
+            "但任何要连 Zotero 的脚本都会在这里失败。",
             "授权命令见 帮助手册 §1.1 步骤 1。Windows 上同样可用（Zotero 会弹对话框）：",
             '        curl -H "Zotero-API-Version: 3" -H "Content-Type: application/json" \\',
             '             -d \'{"appName":"LitHub"}\' "http://127.0.0.1:23119/api/users/0/keys"',
