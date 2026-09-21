@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LitHub 每日日报 —— Windows「任务计划程序」的任务定义（导入用模板）
+
+  怎么用：
+    1. 打开「任务计划程序」（Win+R 输入 taskschd.msc）
+    2. 右侧操作栏 → 「导入任务…」→ 选到这个文件 → 打开
+    3. 导入对话框里**先把两个占位符改成你的实际路径**（也可以导入后在「操作」页改）：
+         <PATH_TO_PYTHON>    → python.exe 的绝对路径，例如
+                               C:\Users\你的名字\AppData\Local\Programs\Python\Python312\python.exe
+                               （用 where.exe python 查；**别用 pythonw.exe**，那会连日志都没有）
+         <PATH_TO_LITHUB>    → 项目根目录，例如 C:\Users\你的名字\LitHub
+                               必须是 %USERPROFILE%\LitHub（脚本里写死了 ~/LitHub）
+       （这两个占位符在文件里写成 &lt; &gt; 转义形式，否则尖括号会被当成 XML 标签、文件就不合法了；
+         替换成真实路径时直接删掉整段含尖括号的文字即可。）
+    4. 「常规」页若要求指定运行账户，选「只在用户登录时运行」最省事；
+       勾上「使用最高权限运行」不是必须的。
+    5. 导入后右键该任务 → 「运行」，手工试一次，再看「上次运行结果」是否为 0x0
+
+  触发与频率：
+    - 触发器为**每天 05:00**（<StartBoundary> 里的日期无所谓，只要时间部分对）
+    - 「脚本自己决定跑不跑」：config/runtime.json 的 schedule 段是频率闸门
+      （enabled / every_n_days），与 Linux 上的 systemd timer 共用同一套代码——
+      所以这里天天触发不会绕过闸门，行为与 Linux 一致
+    - Task Scheduler 的「若错过计划时间则尽快启动任务」对应 Linux 的 Persistent=true，
+      已在 <StartWhenAvailable> 里打开
+
+  想再加两个定时任务（每月刷新画像、06:00 兜底发信），复制本文件改三处即可：
+    日报     scripts\daily_digest.py
+    画像     scripts\build_profile.py        （每月 1 日，触发器用 ScheduleByMonth）
+    补发信   scripts\send_digest.py          （每天 06:00）
+
+  ⚠️ **本文件未经实测**：作者没有 Windows 机器，XML 是按任务计划程序导出的结构手写的。
+     两个已知的导入注意点：
+       - 任务计划程序自己导出的文件是 **UTF-16** 编码；本文件是 UTF-8。
+         一般能正常导入；若导入时报编码相关错误，用记事本「另存为」并选 UTF-16 再试。
+       - 这里没有写 <UserId>（导出文件里通常有 SID）。若导入时提示需要账户信息，
+         在导入向导里选当前用户即可。
+     另外注意输出：任务计划程序**不会**帮你把 stdout 存成日志文件。要看输出，
+     把 <Command> 改成 cmd.exe、<Arguments> 改成
+       /c "python scripts\daily_digest.py >> logs\daily_digest.out 2>&1"
+     （日志本身仍会写进 logs\daily_digest.log）。
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>LitHub</Author>
+    <Description>LitHub 每日文献日报：跑 scripts\daily_digest.py 生成 文献日报\YYYY-MM-DD.md。
+是否真的跑由 config/runtime.json 的 schedule 段（enabled / every_n_days）决定。</Description>
+    <URI>\LitHub Daily Digest</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-09-20T05:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>&lt;PATH_TO_PYTHON&gt;</Command>
+      <Arguments>scripts\daily_digest.py</Arguments>
+      <WorkingDirectory>&lt;PATH_TO_LITHUB&gt;</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

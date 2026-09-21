@@ -1,0 +1,582 @@
+{
+ "_comment": "领域配置。换研究方向只需改这个文件：分类法 / 检索式 / 关键词 / 闸门正则 / 期刊白名单。",
+ "name": "锂离子电池层状氧化物正极",
+ "category_order": [
+  "结构退化",
+  "氧活性",
+  "界面反应",
+  "离子输运",
+  "力学耦合",
+  "基础理论"
+ ],
+ "extra_categories": [
+  "综述"
+ ],
+ "fallback_category": "结构退化",
+ "theory_category": "基础理论",
+ "archive_collections": [
+  "归档"
+ ],
+ "categories": {
+  "结构退化": {
+   "sub": [
+    "相变",
+    "阳离子无序",
+    "晶格畸变",
+    "过渡金属溶解"
+   ],
+   "queries": [
+    "cation disorder Li/Ni intermixing Ni-rich cathode",
+    "surface reconstruction layered cathode degradation",
+    "H2-H3 phase transition Ni-rich cathode",
+    "intergranular cracking NMC secondary particle",
+    "LiNiO2 structural degradation"
+   ],
+   "keywords": [
+    "cation mixing",
+    "cation disorder",
+    "antisite",
+    "li/ni intermixing",
+    "intermixing",
+    "surface reconstruction",
+    "rocksalt",
+    "rock-salt",
+    "phase transition",
+    "h2-h3",
+    "h2–h3",
+    "structural degradation",
+    "structural evolution",
+    "lattice collapse",
+    "degradation mechanism",
+    "spinel phase",
+    "structural stability",
+    "irreversible"
+   ],
+   "pref": 1.0
+  },
+  "氧活性": {
+   "sub": [
+    "氧氧化还原",
+    "O2 释放",
+    "电压滞后"
+   ],
+   "queries": [
+    "anionic redox layered oxide cathode",
+    "oxygen release Ni-rich layered cathode",
+    "singlet oxygen cathode electrolyte oxidation",
+    "oxygen redox voltage hysteresis Li-rich cathode",
+    "lattice oxygen stability high-voltage cathode"
+   ],
+   "keywords": [
+    "anionic redox",
+    "anion redox",
+    "oxygen redox",
+    "o-redox",
+    "lattice oxygen",
+    "oxygen release",
+    "o2 release",
+    "singlet oxygen",
+    "oxygen vacancy",
+    "voltage hysteresis",
+    "voltage decay",
+    "voltage fade",
+    "oxygen stability",
+    "reductive coupling",
+    "oxygen dimeriz",
+    "oxygen oxidation",
+    "oxygen loss"
+   ],
+   "pref": 1.0
+  },
+  "界面反应": {
+   "sub": [
+    "电解液分解",
+    "CEI",
+    "电解液浸润"
+   ],
+   "queries": [
+    "cathode electrolyte interphase Ni-rich cathode",
+    "transition metal dissolution cathode electrolyte",
+    "electrolyte oxidation layered oxide cathode surface",
+    "CEI characterization high-voltage cathode",
+    "electrolyte corrosion grain boundary layered cathode",
+    "HF attack transition metal dissolution Ni-rich cathode",
+    "electrolyte decomposition Ni-rich cathode surface",
+    "Ni dissolution cathode electrolyte high voltage"
+   ],
+   "keywords": [
+    "cathode-electrolyte interphase",
+    "cathode electrolyte interphase",
+    "cei",
+    "electrolyte decomposition",
+    "electrolyte oxidation",
+    "transition metal dissolution",
+    "tm dissolution",
+    "metal dissolution",
+    "hf attack",
+    "side reaction",
+    "electrolyte additive",
+    "coating",
+    "interface engineering",
+    "electrolyte engineering",
+    "interphase",
+    "solvation",
+    "crossover",
+    "parasitic"
+   ],
+   "pref": 1.3
+  },
+  "离子输运": {
+   "sub": [
+    "锂离子扩散",
+    "晶界输运",
+    "表面输运"
+   ],
+   "queries": [
+    "lithium diffusion layered oxide cathode kinetics",
+    "single crystal Ni-rich cathode rate capability",
+    "grain boundary lithium transport cathode",
+    "Li diffusion pathway layered oxide DFT"
+   ],
+   "keywords": [
+    "li diffusion",
+    "lithium diffusion",
+    "li+ diffusion",
+    "ionic conductivity",
+    "ion transport",
+    "rate capability",
+    "rate performance",
+    "grain boundary",
+    "single crystal",
+    "single-crystal",
+    "activation energy",
+    "kinetics",
+    "tortuosity",
+    "diffusion barrier",
+    "fast charging",
+    "diffusion kinetics"
+   ],
+   "pref": 1.0
+  },
+  "力学耦合": {
+   "sub": [
+    "化学-力学耦合",
+    "裂纹",
+    "本征力学性能"
+   ],
+   "queries": [
+    "chemo-mechanical coupling cathode particle fracture",
+    "microcracking NMC secondary particle stress",
+    "lattice strain cathode degradation mechanics",
+    "phase-field cathode particle degradation",
+    "intergranular cracking grain boundary layered cathode",
+    "chemo-mechanical coupling single crystal Ni-rich cathode",
+    "chemo-mechanical degradation Ni-rich cathode",
+    "secondary particle cracking Ni-rich cathode",
+    "chemisorption grain boundary embrittlement cathode",
+    "adsorption induced decohesion layered oxide cathode",
+    "interfacial chemistry fracture energy cathode",
+    "electrolyte attack grain boundary cathode",
+    "stress corrosion cracking battery electrode",
+    "grain boundary toughness cathode first-principles"
+   ],
+   "keywords": [
+    "chemo-mechanical",
+    "chemo mechanical",
+    "mechanical",
+    "strain",
+    "stress",
+    "fracture",
+    "crack",
+    "cracking",
+    "calendering",
+    "elastic",
+    "anisotropic expan",
+    "volume change",
+    "intragranular",
+    "intergranular"
+   ],
+   "pref": 1.7
+  },
+  "基础理论": {
+   "sub": [],
+   "queries": [
+    "machine learning interatomic potential cathode",
+    "DFT first-principles oxygen redox Ni-rich cathode",
+    "high-throughput screening layered oxide cathode stability",
+    "phase-field model cathode degradation"
+   ],
+   "keywords": [
+    "first-principles",
+    "first principles",
+    "dft",
+    "density functional",
+    "ab initio",
+    "machine learning",
+    "neural network",
+    "molecular dynamics",
+    "monte carlo",
+    "high-throughput",
+    "computational",
+    "screening",
+    "simulation",
+    "modeling",
+    "modelling",
+    "thermodynamic",
+    "descriptor",
+    "cluster expansion"
+   ],
+   "pref": 1.0
+  }
+ },
+ "_labels_comment": "标签词表：四个轴的键就是该轴允许的标签值（apply_to_zotero 用它校验），值是 classify() 的匹配关键词；关键词为空 = 只允许人工标注、不参与自动判分。子类轴的可选值以 categories.<类>.sub 为准，这里的 sub 只是关键词表（`电解液浸润` 有子类无关键词）。",
+ "labels": {
+  "sub": {
+   "相变": [
+    "phase transition",
+    "phase transformation",
+    "h2-h3",
+    "h2–h3",
+    "o3-type",
+    "p2-type",
+    "structural transition",
+    "phase evolution"
+   ],
+   "阳离子无序": [
+    "cation mixing",
+    "cation disorder",
+    "antisite",
+    "li/ni intermixing",
+    "li/ni mixing",
+    "intermixing",
+    "cation migration",
+    "tm migration"
+   ],
+   "O2 释放": [
+    "oxygen release",
+    "o2 release",
+    "lattice oxygen loss",
+    "oxygen loss",
+    "gas evolution",
+    "oxygen evolution",
+    "o2 evolution",
+    "gas release"
+   ],
+   "锂离子扩散": [
+    "li diffusion",
+    "lithium diffusion",
+    "li+ diffusion",
+    "diffusion barrier",
+    "ion transport",
+    "activation energy",
+    "diffusion kinetics",
+    "ionic conductivity"
+   ],
+   "氧氧化还原": [
+    "anionic redox",
+    "anion redox",
+    "oxygen redox",
+    "o-redox",
+    "oxygen oxidation",
+    "reductive coupling"
+   ],
+   "表面输运": [
+    "surface diffusion",
+    "surface reconstruction",
+    "surface phase",
+    "surface degradation",
+    "interfacial transport",
+    "surface oxygen"
+   ],
+   "电解液分解": [
+    "electrolyte decomposition",
+    "electrolyte oxidation",
+    "solvent oxidation",
+    "side reaction",
+    "hf attack",
+    "decomposition"
+   ],
+   "裂纹": [
+    "crack",
+    "cracking",
+    "fracture",
+    "microcrack",
+    "intergranular",
+    "intragranular"
+   ],
+   "电压滞后": [
+    "voltage hysteresis",
+    "voltage decay",
+    "voltage fade",
+    "hysteresis"
+   ],
+   "过渡金属溶解": [
+    "transition metal dissolution",
+    "tm dissolution",
+    "metal dissolution",
+    "ni dissolution",
+    "mn dissolution",
+    "dissolution"
+   ],
+   "晶格畸变": [
+    "lattice distortion",
+    "jahn-teller",
+    "lattice strain",
+    "lattice collapse",
+    "anisotropic lattice"
+   ],
+   "本征力学性能": [
+    "elastic modulus",
+    "young's modulus",
+    "hardness",
+    "nanoindentation",
+    "mechanical propert"
+   ],
+   "晶界输运": [
+    "grain boundary",
+    "grain-boundary",
+    "intergranular transport"
+   ],
+   "化学-力学耦合": [
+    "chemo-mechanical",
+    "chemo mechanical",
+    "chemo-mechanics",
+    "stress-coupled",
+    "coupled diffusion"
+   ],
+   "CEI": [
+    "cei",
+    "cathode-electrolyte interphase",
+    "cathode electrolyte interphase",
+    "interphase"
+   ]
+  },
+  "method": {
+   "DFT": [
+    "dft",
+    "density functional",
+    "first-principles",
+    "first principles",
+    "ab initio",
+    "pbe",
+    "hse06"
+   ],
+   "AIMD": [
+    "ab initio molecular dynamics",
+    "aimd"
+   ],
+   "机器学习势": [
+    "machine learning potential",
+    "machine learning interatomic",
+    "neural network potential",
+    "mlip"
+   ],
+   "机器学习/数据驱动": [
+    "machine learning",
+    "deep learning",
+    "data-driven",
+    "neural network",
+    "random forest",
+    "descriptor"
+   ],
+   "相场/连续介质建模": [
+    "phase-field",
+    "phase field",
+    "finite element",
+    "continuum model",
+    "multiphysics"
+   ],
+   "实验-电化学": [
+    "electrochemical",
+    "cycling",
+    "capacity retention",
+    "coulombic",
+    "galvanostatic",
+    "impedance",
+    "eis",
+    "c-rate",
+    "rate capability"
+   ],
+   "实验-表征": [
+    "xrd",
+    "tem",
+    "stem",
+    "xas",
+    "xps",
+    "nmr",
+    "raman",
+    "sem ",
+    "neutron",
+    "synchrotron",
+    "tof-sims",
+    "mössbauer",
+    "mossbauer",
+    "operando",
+    "in situ",
+    "diffraction",
+    "spectroscopy"
+   ],
+   "理论分析": []
+  },
+  "materials": {
+   "NCM/NCA": [
+    "ncm",
+    "nca",
+    "ncm811",
+    "ncm622",
+    "ncm523",
+    "lini0.8",
+    "lini0.9",
+    "nickel-rich",
+    "ni-rich",
+    "ultrahigh-nickel",
+    "ultra-high-nickel",
+    "high-nickel",
+    "lini0",
+    "lini1",
+    "linio2"
+   ],
+   "富锂锰基": [
+    "li-rich",
+    "li rich",
+    "lithium-rich",
+    "lmr",
+    "li1.2",
+    "li2mno3",
+    "mn-rich",
+    "manganese-rich",
+    "overlithiated",
+    "lithium- and manganese-rich"
+   ],
+   "LiNiO2": [
+    "linio2",
+    "lini o2",
+    "lithium nickel oxide"
+   ],
+   "LiCoO2": [
+    "licoo2",
+    "lco"
+   ],
+   "尖晶石": [
+    "spinel",
+    "limn2o4"
+   ]
+  },
+  "system": {
+   "固态电解质": [
+    "solid electrolyte",
+    "solid-state electrolyte",
+    "solid state electrolyte",
+    "all-solid-state",
+    "all solid state",
+    "sulfide electrolyte",
+    "li6ps5cl",
+    "argyrodite",
+    "garnet electrolyte",
+    "llzo",
+    "llzto",
+    "polymer electrolyte",
+    "composite electrolyte"
+   ],
+   "固液对比": [
+    "liquid and solid electrolyte",
+    "liquid versus solid",
+    "liquid vs solid",
+    "liquid- and solid"
+   ]
+  },
+  "form": {
+   "单晶": [
+    "single crystal",
+    "single-crystal",
+    "single crystalline"
+   ],
+   "多晶二次颗粒": [
+    "polycrystalline",
+    "secondary particle",
+    "polycrystal",
+    "poly-crystalline"
+   ]
+  }
+ },
+ "journals": [
+  "Science",
+  "Nature",
+  "Nature Energy",
+  "Nature Materials",
+  "Nature Chemistry",
+  "Nature Communications",
+  "Nature Reviews Materials",
+  "Nature Nanotechnology",
+  "Joule",
+  "Chem",
+  "Chem Reviews",
+  "Chemical Society Reviews",
+  "Energy & Environmental Science",
+  "Energy Storage Materials",
+  "Advanced Materials",
+  "Advanced Energy Materials",
+  "Advanced Functional Materials",
+  "Advanced Science",
+  "Angewandte Chemie",
+  "Journal of the American Chemical Society",
+  "ACS Nano",
+  "ACS Energy Letters",
+  "ACS Applied Materials & Interfaces",
+  "ACS Applied Energy Materials",
+  "ACS Sustainable Chemistry & Engineering",
+  "Chemistry of Materials",
+  "Nano Letters",
+  "Small",
+  "Nano Energy",
+  "Nano Research",
+  "Journal of Power Sources",
+  "Journal of The Electrochemical Society",
+  "Journal of Energy Chemistry",
+  "Journal of Materials Chemistry A",
+  "Journal of Physical Chemistry C",
+  "Chemistry - A European Journal",
+  "Electrochimica Acta",
+  "Electrochemical Energy Reviews",
+  "Solid State Ionics",
+  "Energy Material Advances",
+  "Energy & Environmental Materials",
+  "Carbon Energy",
+  "Materials Today",
+  "Materials Today Energy",
+  "Cell Reports Physical Science",
+  "Progress in Materials Science",
+  "Science Advances",
+  "npj Computational Materials",
+  "eScience",
+  "Chemical Engineering Journal",
+  "Green Energy & Environment",
+  "Batteries & Supercaps",
+  "ChemSusChem",
+  "ChemElectroChem",
+  "Physical Review Letters",
+  "Physical Chemistry Chemical Physics",
+  "npj Materials Degradation",
+  "Science China Materials",
+  "Rare Metals",
+  "Advanced Energy and Sustainability Research",
+  "Interdisciplinary Materials",
+  "Energy Advances",
+  "Materials Reports: Energy",
+  "Fundamental Research"
+ ],
+ "coupling": [
+  "化学→力学",
+  "力学→化学",
+  "双向",
+  "本征力化学"
+ ],
+ "gates": {
+  "topic": "cathode|layered oxide|layered cathode|positive electrode|ncm|nca|\\blini(?:o2|[^a-z])|li-rich",
+  "topic_theory": "cathode|layered oxide|lithium|li-ion|li ion|ncm|\\blini(?:o2|[^a-z])|li-rich|lco|battery",
+  "must": "lithium|li-ion|li\\-ion|\\bli\\b|ni-rich|ncm|nca|\\blini(?:o2|[^a-z])|li-rich|li1\\.|licoo|lco\\b|overlithiated|lithiated|delithiation|lithiation",
+  "strong": "lithium|li-ion|li ion|li-rich|lithium-rich|ncm|nca|\\blini(?:o2|[^a-z])|licoo|lco\\b|overlithiated|delithiation|lithiation|li1\\.[0-9]|li2mno3",
+  "exclude": "\\bsodium\\b|\\bpotassium\\b|\\bzinc\\b|\\bmagnesium\\b|\\bcalcium\\b|na-ion|na\\-ion|k-ion|zn-ion|mg-ion|aluminum-ion|supercapacitor|solar cell|photovoltaic|perovskite solar|hydrogen evolution|oxygen evolution|water splitting|electrocatalys|h2o2|fuel cell|thermoelectric|solid oxide fuel|li-s battery|li-sulfur|lithium-sulfur|air battery|retracted|graphite anode|silicon anode|separator failure|polyanionic|prussian",
+  "offtopic": "pemfc|proton exchange membrane|\\bfuel cell\\b|\\bcementitious\\b|\\bcement\\b|chlorofulleren|photocatalys|\\bco2 reduction\\b|\\bthermal conductivity\\b|supercapacitor|thermoelectric|skyrmion|\\bsolar\\b|biomass|catalyst layer|water treatment|seawater|water electrolysis|electroly[sz]er|\\belectrolysis\\b|desalination"
+ }
+}

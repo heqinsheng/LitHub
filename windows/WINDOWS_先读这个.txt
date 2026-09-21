@@ -1,0 +1,44 @@
+LitHub —— Windows 用户先读这个
+============================================================
+
+⚠️ 先说清楚：作者没有 Windows 机器，Windows 支持属于「代码已适配、但未实测」。
+   遇到问题欢迎在 GitHub 上提 issue，报错原文越完整越好。
+
+【最快的路：WSL2】（推荐先试）
+------------------------------------------------------------
+原样跑 Linux 版，一行代码都不用改。
+完整步骤见 docs/windows.md 的「路线 A」。
+唯一要注意的是让 WSL 连上 Windows 侧的 Zotero：
+在 C:\Users\<你>\.wslconfig 里写
+
+    [wsl2]
+    networkingMode=mirrored
+
+（这是微软文档里的镜像网络模式；本项目未实测。）
+
+【原生 Windows】
+------------------------------------------------------------
+1. 装 Python 3.12+（安装时勾上 Add to PATH）
+2. 装 poppler（提供 pdfinfo / pdftotext）和 Ghostscript（提供 gs），加进 PATH，重开终端
+3. pip install mineru，然后 mineru-open-api auth 配 token
+4. 准备一个 LLM CLI，用环境变量 LITHUB_KIMI 指向它的可执行文件
+   （默认路径 ~/.kimi-code/bin/kimi 是 Unix 布局，Windows 上必须用这个变量覆盖）
+5. 装 Zotero 桌面版，打开「允许其他应用与本机 Zotero 通信」，再做一次写入授权
+6. 建议开「启用长路径支持」——papers\...\images\ 的路径可能超过 260 字符
+
+完整步骤（含 PowerShell 版的授权命令）见 docs/windows.md 的「路线 B」。
+
+【第一步先跑自检】
+------------------------------------------------------------
+    python scripts\doctor.py
+
+它会逐项检查 Python 版本、四个外部命令、LLM CLI、Zotero 本地 API、写授权密钥，
+并做一次中文编码自检。缺什么、怎么装，它都会直接说。
+
+【然后】
+------------------------------------------------------------
+照 帮助手册.md 的 §1 走最短路径，约 30 分钟能看到第一个成果
+（一篇 PDF 变成 Zotero 里带中文总结的条目）。
+
+⚠️ 提醒：下付费论文（Elsevier / Wiley / Springer 正刊）脚本拿不到，
+   还是要在校园网或图书馆环境下自己下载，丢进 待整理\ 再跑收编。

@@ -1,0 +1,136 @@
+# LitHub CI —— 在 Linux 与 Windows 上做一次最小冒烟检查
+#
+# ⚠️ **这个 CI 测不到什么**（别把「绿了」当成「流水线通了」）：
+#   - **Zotero**：脚本连的是本机 23119 端口的 Zotero 桌面版，CI 里没有这个东西。
+#     任何**真会发请求**的脚本一律不跑：apply_to_zotero / fill_meta / intake_pdfs /
+#     library_index / link_markdown / migrate_labels / score_library / sync_properties / tidy。
+#     （zapi.py 的 import 本身不做 I/O——Server-ID 与密钥都是首次发请求时才取，
+#     所以这些脚本在 CI 里能编译、能 import，只是跑起来会连不上。）
+#   - **MinerU**（mineru-open-api）：要 token、要传外部服务。
+#   - **LLM**：kimi CLI 与 DeepSeek key 都不在 CI 里。
+#   - **任何写 state/、papers/、logs/ 的路径，以及所有下载行为。**
+#
+# 所以「CI 绿」只代表三件事：
+#   ① 全部脚本能在 Windows 上编译、能导入；
+#   ② 中文（含 GBK 编不出的字符）的读写往返正确；
+#   ③ 不依赖外部服务的脚本能正常启动。
+# **整条流水线是否跑通，只能在真机上按 docs/windows.md 手工验**——作者没有 Windows 机器。
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false          # 一个平台挂了也要看到另一个平台的结果
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 先把这个 job 的「环境底牌」打出来：Windows 上默认编码通常是 cp936，
+      # 也就是中文会静默乱码的那个编码——下面的自测就是冲它去的。
+      - name: 打印运行环境（诊断用）
+        shell: bash
+        run: |
+          python -VV
+          python -c "import locale,sys; print('platform =', sys.platform); print('getpreferredencoding(False) =', locale.getpreferredencoding(False)); print('stdout.encoding =', sys.stdout.encoding); print('utf8_mode =', sys.flags.utf8_mode)"
+
+      # 用 bash：Windows runner 上是 Git Bash，它会替我们展开通配符。
+      # PowerShell 不给原生命令展开 *.py，那样传进去的字面量会直接报「找不到文件」。
+      # 仓库分成 linux/ 与 windows/ 两份（代码相同），两份都验——能抓出复制时的缺漏。
+      - name: py_compile 全部脚本（两个版本都验）
+        shell: bash
+        run: |
+          for d in linux windows; do
+            echo "--- $d ---"
+            python -m py_compile "$d"/scripts/*.py
+          done
+
+      # ── 本 workflow 存在的理由 ────────────────────────────────────────
+      # 断言的写法有意与 locale 默认编码**解耦**：
+      # 比的是「落盘的字节」与「读回来的内容」，而不是比两边的字符串是否都「看着对」——
+      # 按 cp936 解码出的乱码字符串也是合法字符串，只有比字节才抓得住。
+      - name: 中文编码往返自测（含 GBK 编不出的字符）
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, locale, os, pathlib, sys, tempfile
+
+          # 挑的都是 GBK 编不出来的字符：✅ ⚠️ 不在 GB2312/GBK 里。
+          # 只挑「结构退化」这种 GBK 也有的一字不差的中文，测不出 cp936 的问题。
+          CN = "结构退化·氧活性·界面反应"
+          HARD = "✅ ⚠️"
+          PAYLOAD = {"primary": CN, "note": CN + " ≤ ≈ → mAh/g " + HARD}
+          EXPECTED_BYTES = json.dumps(PAYLOAD, ensure_ascii=False).encode("utf-8")
+
+          pref = locale.getpreferredencoding(False)
+          print(f"platform = {sys.platform}")
+          print(f"locale.getpreferredencoding(False) = {pref}")
+          print(f"sys.flags.utf8_mode = {sys.flags.utf8_mode}")
+
+          d = tempfile.mkdtemp()
+          p = os.path.join(d, "classification.json")
+          q = pathlib.Path(d) / "manifest.json"
+
+          # ① open()：仓库脚本现在的写法（显式 utf-8）
+          with open(p, "w", encoding="utf-8") as f:
+              json.dump(PAYLOAD, f, ensure_ascii=False)
+          got = open(p, "rb").read()
+          assert got == EXPECTED_BYTES, f"落盘字节不是 UTF-8：{got!r}"
+          with open(p, encoding="utf-8") as f:
+              back = json.load(f)
+          assert back == PAYLOAD, f"读回不一致：{back!r}"
+
+          # ② Path.read_text / write_text：同样必须显式 utf-8
+          q.write_text(json.dumps({"title": HARD}, ensure_ascii=False), encoding="utf-8")
+          assert q.read_bytes() == json.dumps({"title": HARD},
+                                              ensure_ascii=False).encode("utf-8")
+          assert json.loads(q.read_text(encoding="utf-8"))["title"] == HARD
+
+          # ③ 关键断言：上面两条与 locale 默认编码**无关**——
+          #    不管 pref 是 utf-8 还是 cp936，落盘字节恒为 UTF-8、读回恒等值。
+          print("① open() 与 ② read_text/write_text 的往返都与默认编码无关 ✓")
+
+          # ④ 反证：确认这台机器确实处在「不显式写 encoding 就会出事」的环境里。
+          #    不写成硬断言：Linux 上它不会失败，而未来的 Python 可能把 Windows 默认
+          #    也改成 UTF-8（PEP 686），那时硬断言反而会误报。
+          if sys.platform.startswith("win"):
+              r = os.path.join(d, "default_encoding.txt")
+              try:
+                  with open(r, "w") as f:          # 故意不写 encoding=
+                      f.write(HARD)
+                  verdict = "默认编码也写得了 ✅（这台机器不像典型的 cp936 环境）"
+              except UnicodeEncodeError as e:
+                  verdict = f"默认编码写不了 ✅ → UnicodeEncodeError({e.encoding})"
+              print(f"④ 对照（不带 encoding=）：{verdict}")
+              print("   ↑ 出现这一行才说明本 job 真的在考「默认编码不是 UTF-8」这件事")
+          PY
+
+      # 只跑**确定没有副作用**的路径：argparse 的 --help（在 parse 阶段就退出），
+      # 以及 runtime.py 的裸跑（只打印生效配置）。
+      # 刻意不跑：所有 import zapi 的脚本（CI 里没有 Zotero）、所有会写 state 的脚本、
+      # 任何要网络或要 LLM 的脚本。
+      - name: 无副作用启动自检（两个版本都验）
+        shell: bash
+        run: |
+          set -x
+          for d in linux windows; do
+            echo "--- $d ---"
+            for f in doctor daily_digest citation_graph journal_if build_embeddings send_digest; do
+              python "$d/scripts/$f.py" --help > /dev/null
+            done
+            python "$d/scripts/runtime.py" > /dev/null
+            python "$d/scripts/doctor.py" --help
+          done
