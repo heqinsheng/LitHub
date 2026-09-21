@@ -241,12 +241,15 @@ def process(rec):
 
     sec = build_section(items, figs)
     s = open(summ, encoding="utf8", errors="replace").read()
-    # --force 重做时必须先摘掉旧的那一节：下面是在「## 机理解释」前插入，旧节也在那个位置，
-    # 不删就会两节叠在一起（实测有篇攒了两份「关键图表」）。re.sub 不带 count，
-    # 顺带把历史遗留的多份一次性清掉。
+    # --force 重做时必须先摘掉旧的那一节：旧节也在这个位置，不删就会两节叠在一起
+    # （实测有篇攒了两份「关键图表」）。re.sub 不带 count，顺带把历史遗留的多份清掉。
     s = re.sub(rf"^{re.escape(MARK)}.*?(?=^## |\Z)", "", s, flags=re.M | re.S)
-    if "## 机理解释" in s:
-        s = s.replace("## 机理解释", sec + "\n## 机理解释", 1)
+    # 插在「与研究主题的关联」之前。**这个锚点必须与 summarize_batch.py 的 MANUAL_ANCHOR 相同**
+    # ——「关键图表」不算七节之一，在那边被当成人工章节，重跑总结时会被 preserve_manual()
+    # 归位到 MANUAL_ANCHOR 前面。本文件曾插在「## 机理解释」之前，于是同一份文件会在
+    # 两个位置之间来回跳（2026-09-21 统一；当时库内 165 篇在 MANUAL_ANCHOR 这侧、仅 1 篇在另一侧）。
+    if "## 与研究主题的关联" in s:
+        s = s.replace("## 与研究主题的关联", sec + "\n## 与研究主题的关联", 1)
     else:
         s = s.rstrip() + "\n\n" + sec
     open(summ, "w", encoding="utf8").write(s)
