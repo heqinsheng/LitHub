@@ -47,7 +47,7 @@ mv ~/lithub-src/windows ~/LitHub     # Windows 用户（含 WSL2）
 | **一个 LLM CLI**        | 写中文总结、挑配图                      | 默认调 `~/.kimi-code/bin/kimi`，用环境变量 `LITHUB_KIMI` 换路径              |
 | **MinerU API token**  | PDF → Markdown（保公式 / 表格 / 图）   | `mineru-open-api auth`；免费额度够个人用                                  |
 
-> ⚠️ **「任意 agent」不完全成立**。`summarize_batch.py` 用的是 kimi 风格的参数
+> summarize_batch.py` 用的是 kimi 风格的参数
 > （`-p`、`--agent-file=`、`--output-format stream-json`，以及环境变量
 > `KIMI_LOOP_MAX_STEPS_PER_TURN`）。换别的 CLI 得确认这几个对得上，否则会退化成
 > 「模型自己读文件」的老路径（每篇贵一倍多，见 `帮助手册.md` §6.5）。
@@ -63,12 +63,6 @@ python scripts/doctor.py
 **够（≥ 50 篇）→ 直接跳到 ③。**
 
 **不够 → 要先解决「该收什么文献」。这里有个现状必须说清：**
-
-> 🚧 **「从种子文献 + 口述研究方向自动生成配置」（`scripts/bootstrap_topic.py`）是路线图上的东西，还没实现。**
-> 现在只能**手工**写 `config/topic.json`：分类法、每类的检索式、判分关键词、闸门正则、期刊白名单。
-> 做法在 `帮助手册.md` §4.1。
-
-库里还空着的时候，实际可行的顺序是：
 
 1. 先手工丢十几篇**你确定属于这个方向**的 PDF 进 `待整理/`，走一遍第 ③ 步
 2. 拿这十几篇当种子，**照着它们归纳**出 3–6 个一级分类和每类的检索式
@@ -103,7 +97,7 @@ python3 scripts/sync_classification.py   # 刷新 分类与标签总表.md
 
 ### ⑤ 调参数，出第一期日报
 
-**第一次一定慢**——检索缓存是冷的（实测约 **28 分钟**；之后同一周期内重跑零网络）。
+**第一次一定慢**——检索缓存是冷的（实测 ～**20 分钟**；之后同一周期内重跑零网络）。
 
 跑之前先改**一处**：`config/runtime.json` 的 `digest.cat_floor`。留着作者的分类名
 （`力学耦合=…`）会**启动即报错退出**——改成你的分类，或先留空 `""` 关掉保底。
