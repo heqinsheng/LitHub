@@ -227,7 +227,33 @@ def absorb(k, surv, live, colname):
     return 200 <= st < 300
 
 
+USAGE = """用法: tidy.py [--apply] [--keep-dups] [--merge-dups]
+  （无位置参数）默认只报告，不删任何东西。
+  --apply       备份后执行清理（空条目 / 重复条目 / 孤儿 papers/ 目录 / 空目录）
+  --keep-dups   不动重复条目
+  --merge-dups  连有子项的重复条目一起合并（与 --apply 同用才生效）
+  -h, --help    打印本用法，不做任何事"""
+
+
+def _guard_argv(argv, usage, known=()):
+    """参数护栏：`--help` 只打印用法、认不出的 `--` 开关报错退出 2，两者都不做事。
+
+    本脚本是 `"--apply" in sys.argv` 式的手工解析（没有 argparse），打错的开关原来会被
+    **静默忽略**：`--a` 静默退回「只报告」，而反过来把 `--dry-run` 写成 `--dryrun`
+    这类笔误就是「安全开关被忽略、真的动手」。护栏把笔误挡在解析阶段。
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    bad = sorted({a for a in argv if a.startswith("--") and a.split("=", 1)[0] not in set(known)})
+    if bad:
+        print(usage, file=sys.stderr)
+        print(f"认不出的开关：{' '.join(bad)}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
+    _guard_argv(sys.argv[1:], USAGE, known=("--apply", "--keep-dups", "--merge-dups"))
     live, children = fetch()
     empty, attach_only, groups, orphans, empty_col, dirs, archived = scan(live, children)
 

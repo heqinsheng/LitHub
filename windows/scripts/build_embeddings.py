@@ -31,8 +31,20 @@
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
+
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 里的 Å / ö / Π 会抛
+# UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding——编不出来时
+# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本不 import 任何本地模块，
+# 所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state"
@@ -87,7 +99,8 @@ def existing():
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，不能当真开关执行
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--model", default=DEFAULT_MODEL,
                     help=f"sentence-transformers 模型名（默认 {DEFAULT_MODEL}）")
     ap.add_argument("--force", action="store_true", help="忽略已有 npz，强制重建")

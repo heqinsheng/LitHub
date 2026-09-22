@@ -94,7 +94,7 @@
 | `coupling` | `耦合:<方向>` 轴取值 | 同上 |
 | `journals` | 期刊白名单 | `find_new.py` / `journal_if.py` |
 | `gates.{topic,must,strong,exclude,offtopic,topic_theory}` | 相关性闸门正则 | `find_new.py` → `daily_digest.py` |
-| `extra_categories` / `fallback_category` / `theory_category` | 综述等其他目录、兜底分类。`其他` 已于 2026-09-20 删掉：它从没装过东西，而 `fallback_category` 是「结构退化」，自动分类不会落到它上面；`apply_to_zotero.py` 每轮建、`tidy.py` 每轮删，纯属互相抵消 | `apply_to_zotero.py` / `daily_digest.py` |
+| `extra_categories` / `fallback_category` / `theory_category` | `extra_categories` 放不参与按分类检索的目录（当前是 `综述` 与 `种子文献`，后者见「标签轴」的「种子」）；后两个是兜底分类。`其他` 已于 2026-09-20 删掉：它从没装过东西，而 `fallback_category` 是「结构退化」，自动分类不会落到它上面；`apply_to_zotero.py` 每轮建、`tidy.py` 每轮删，纯属互相抵消 | `apply_to_zotero.py` / `daily_digest.py` |
 | `archive_collections` | 归档目录名（如 `["归档"]`），其下整棵子树是历史项目：`tidy.py` 不碰、也不扫描 | `tidy.py` 的 `ARCHIVE_NAMES` |
 
 装载器是 `scripts/topic.py`（只读 + 编译正则，不含领域内容）；路径可用环境变量
@@ -130,6 +130,7 @@
 | `pool` | `refresh_days` / `rows` / `pages` / `query_pages` | 检索池的刷新周期与取数深度 |
 | `scoring` | `w_r` … `c_age_tau_y` | 打分权重与各分量常数 |
 | `email` | `enabled` / `to` / `smtp_host` / `smtp_port` / `smtp_user` / `use_ssl` / `subject` | 日报发信（见「发信」一节）。**密码不在这里**——读 `state/smtp_password` |
+| `seed` | `citer_boost` / `score_mult` | 种子文献的打分杠杆（见「标签轴」的「种子」）：引用者是不是种子、种子自身加成。改完立即生效 |
 
 - 优先级 **CLI 参数 > `runtime.json` > 内置默认**。内置默认与原硬编码**逐字一致**，
   所以配置文件缺失时行为不变（`runtime.py` 会把 `LOADED=False` 报出来）。
@@ -138,10 +139,12 @@
   （不校验、不进配置、不出现在 `--show-config` 里）。JSON 没有注释语法，所以沿用了
   `topic.json` 的 `_comment` 那套下划线约定；**新增字段时请顺手补 `_help`**。
 - **校验从严**：未知键、类型不对（`true` 不会被当 1 收下）、越界值一律**启动即 `ValueError`**，
-  不静默忽略——与 `parse_cat_floors` 同一条纪律。只有两条权重不变量
-  （`w_r+w_c+w_x+w_j+w_a ≈ 1.0`、`w_s ≤ w_r`）是警告而非报错，因为改了它们会让
-  `--min-score` 的刻度跟着变，属于「有救但必须让人看见」。
-- **改 `scoring` 就必须重标定 `--min-score`**：那 6 个权重是一起标定的，动一个门槛就失配。
+  不静默忽略——与 `parse_cat_floors` 同一条纪律。权重不变量只剩**一条**给警告：`w_s ≤ w_r`
+  （超了 R 归零或为负）。旧的「`w_r+w_c+w_x+w_j+w_a ≈ 1.0`」**已于 2026-09-22 删除**——
+  `scoring_weights()` 现在按 `tot = w_r+w_c+w_x+w_j+w_a` **自己归一化**（有 S 时 `R+S = w_r`、
+  没 S 时 `R = w_r`，同一个分母），基线分恒落在 `[0,1]`，权重总和写多少都不再影响尺度。
+- **改 `scoring` 仍要重标定 `--min-score`**：那 6 个权重是一起标定的。归一化消掉的是
+  「绝对刻度随总和漂」这一项，**各分量的相对权重重排**照样让门槛失配。
 - `cat_floor` 在**代码里的默认值是空串**（分类名属领域内容，代码不含任何分类名）；
   要开保底得在这里写明，且分类名必须存在于 `topic.json` 的 `category_order`，
   否则启动报错退出。
@@ -167,6 +170,22 @@
     **只标注、不参与日报打分**——`daily_digest.py` 的 `classify()` 只读 `primary`/`sub`。
     判定准则：**只要作者自己主张了该方向的因果关系即计入，不要求其给出直接证据**
   - `兼属:<一级分类>`——该文的第二主题，与 `secondary` 字段一一对应
+  - `种子`——**跨主题的种子文献**标记：条目在 `classification.json` 里写 `"seed": true`，
+    `apply_to_zotero.py` 就打 `种子` 标签、并把它归入 `种子文献` 目录。用途是给
+    `bootstrap_topic.py`（路线图，**尚未实现**）攒种子集——那份设计要 20–50 篇种子来反推一套
+    新方向的 `topic.json`（见「领域配置」一节末尾）。
+    **与 `耦合:` 那种纯标注不同，它参与打分**，两张杠杆在 `config/runtime.json` 的 `seed` 段
+    （改完立即生效，不必重跑画像）：
+    - `citer_boost`（默认 `2.0`）——**种子的一票算几票**。`citation_term` 把被引篇数换成
+      `n_eff = n + (boost−1)·n_seed`，于是「被种子引用过的候选」在**日报的 refs 通道**与
+      **库内推荐分**里都更靠前（两者共用同一个 `citation_term`）。实测加 1 篇种子时，
+      67 篇被它引用的库内文献里 65 篇的 `C` 被抬高，只被种子引用过的那几篇抬得最多（+0.085）。
+      作用在饱和项上，`C` 仍封在 `[0,1]`，`--min-score` 的刻度不变。
+    - `score_mult`（默认 `1.3`）——种子**自身**推荐分的倍数（只有 `score_library.py` 用）。
+    ⚠️ `种子文献` 目录建自 `config/topic.json` 的 `extra_categories`，靠它 `tidy.py` 才不会
+    把这目录当空目录删掉；换方向想另起一套种子集，改这个数组即可。取消某篇的种子身份时，
+    光删 `seed` 字段不够——`apply_to_zotero.py` 是纯新增，`种子` 标签与目录归属要手工撤。
+    种子标的是「这个方向的核心参考文献」，不要求它属于当前的一级分类。
   - 五个轴的**可选值都在 `config/topic.json`**（`labels.*` 与 `coupling`）：`apply_to_zotero.py`
     会拿它校验 `classification.json`，词表外的取值会打印 `! 词表外的取值` 告警。
     `sub` 的可选值以 `categories.<类>.sub` 为准（`labels.sub` 只是关键词表）。
@@ -236,10 +255,24 @@ front-matter（元数据由 Zotero 给）、图片路径行（总结只写图号
 oneshot 的 `inline`/`file` 载体没有工具调用，这个上限自然不参与。它仍然管着兜底路径，也是
 「模型一步没走完」的护栏（`summarize()` 核对 `summary.md` 的 mtime，没变过就报「未落笔」）。
 
-提示词模板 `prompts/summarize.md` 有 6 个占位符：`{task}`（任务定位句，按载体换措辞）、`{meta}`、
+提示词模板有**两套**，都在 `prompts/`：
+- `summarize.md` —— **研究论文**（一句话结论 / 研究问题 / 方法与技术路线 / 关键发现 / 机理解释 /
+  局限与未解决的问题 / 与研究主题的关联）
+- `summarize_review.md` —— **综述**（一句话结论 / 综述范围与选文标准 / 分类框架 /
+  各方向的主要结论与证据 / 共识与争议 / 作者的判断与趋势 / 与研究主题的关联）。
+  首末两节与研究论文版同名，**末节同名是有意的**：`MANUAL_ANCHOR`、`embed_figures.py` 的插入锚点、
+  `preserve_manual()` 的归位都依赖那个字面量。三列（`方向 | 主要结论 | 关键证据`）也是综述专有的。
+
+**按 `classification.json` 的 `is_review` 自动选**（`template_choice()`）；该 key 不在表里就按研究论文
+处理并打一行日志；综述模板文件缺失时退回研究论文版并告警。`--template PATH` 显式指定仍覆盖两者。
+⚠️ 合规校验（`missing_sections()`）按**本次实际用的那套**比——2026-09-22 之前它只认研究论文七节，
+于是每篇综述都被判「缺 5 节」、白跑一次重试（实测那次重试约占总成本 **40%**）。
+
+两套模板共用 6 个占位符：`{task}`（任务定位句，按载体**与是否综述**换措辞）、`{meta}`、
 `{library}`、`{draft_rule}`、`{source}`（论文全文，只有 inline 注入）、`{deliver}`（交付要求），
 外加 FIGURES 段里的 `{figure_manifest}`。改模板后要同步 `summarize_batch.py` 的内置兜底常量——
-目前是用脚本把模板正文抽出来覆写 `PROMPT` / `FIGURE_ADDENDUM` 两个常量。
+目前是用脚本把**研究论文**模板的正文抽出来覆写 `PROMPT` / `FIGURE_ADDENDUM` 两个常量；
+**综述版没有内置兜底**，只有文件（缺了就退回研究论文版并告警，不复制一份 100 行的常量以免两份文本漂移）。
 
 #### 写一篇总结要花多少 token（2026-09-20 实测）
 
@@ -315,11 +348,19 @@ python3 scripts/intake_pdfs.py --remove      # --remove：收编成功后删掉�
 出版方的作者接受稿（OSTI/仓库版）常整篇不含 DOI，首页提取不到就会跳过；这类在
 `待整理/_doi_hints.json` 里补一行 `"<文件名>": "<DOI>"`，脚本优先用它（提示优先于文本提取）。
 
-收编只负责「条目 + PDF 附件 + manifest」。随后补齐三步才算整理完：
+收编只负责「条目 + PDF 附件 + manifest」。随后补齐四步才算整理完：
 
 1. 给新条目在 `state/classification.json` 里加一条分类（primary/secondary/sub/method/materials/form）
 2. `python3 scripts/apply_to_zotero.py` 写入分类目录与标签，再 `python3 scripts/sync_classification.py` 刷新总表
 3. `python3 scripts/mineru_batch.py all 3` → `python3 scripts/summarize_batch.py 3` → `python3 scripts/link_markdown.py`
+4. **刷新库内派生数据**——只加条目是不够的，下面几个文件都按 key/DOI 存了快照，新条目不在里面：
+   `python3 scripts/library_index.py`（DOI 索引。**不跑它，新条目不会被推荐分与日报的库内关联看到**）
+   → `python3 scripts/citation_graph.py`（引文图，增量，只处理新增的篇）
+   → `python3 scripts/score_library.py --apply`（推荐分，写回 Zotero 的 `Extra`）
+   → `python3 scripts/digest.py json` → `python3 scripts/build_profile.py`（画像/检索式依赖 digest.json）
+
+（2026-09-21 踩过：连续入库 13 篇，但只跑到第 3 步——`state/library_index.json` 还是旧的 184 条，
+于是推荐分少算了 9 篇、`文献画像.md` 也落后。这几个脚本**不会自己察觉新条目**，必须按顺序手动跑。）
 
 最后收尾跑一次 `python3 scripts/tidy.py --apply`（见下节），把空目录之类一并清掉。
 
@@ -533,6 +574,10 @@ python3 scripts/find_new.py 2025-01-01 80 crossref
 力学耦合 3、界面反应 2、基础理论 2」，保底两项均达标。
 
 ```
+# 系数 = config 的 w_* 除以 tot = w_r+w_c+w_x+w_j+w_a（2026-09-22 起 scoring_weights() 自己归一化）。
+# 下面这组是**内置默认**：它的 tot 正好 = 1.00，所以与旧刻度逐字相同。
+# 本仓 config 是 0.40 / 0.20 / 0.20 / 0.15 / 0.10 / 0.01，tot=0.86 → 实际生效
+# R=S=C=0.2326、X=0.1744、J'=0.1163、A=0.0116（分数整体 ×1.1628，排名一个都不变）
 B = 0.25*R + 0.15*S + 0.22*C + 0.20*X + 0.13*J' + 0.05*A    # S 可用时
 B = 0.40*R + 0.22*C + 0.20*X + 0.13*J' + 0.05*A             # S 不可用：那 0.15 回补给 R
 final = B * (1 + 0.35*F)                     # 综述再 ×0.9
@@ -809,23 +854,44 @@ python3 scripts/send_digest.py --force          # 强制重发（计数 +1）
 （`citation_graph.py`）、`state/classification.json`。缺任一个脚本直接退出并点名该先跑谁
 （2026-09-21 修：此前是裸 `FileNotFoundError`，不说是缺哪个）。
 
-**为什么不能照搬日报的公式**——日报的分是
-`B = w_r·R + w_s·S + w_c·C + w_x·X + w_j·J' + w_a·A`，其中两项**对库内文献没有意义**：
+**与日报是同一套公式**（2026-09-21 改）：日报的分是
+`B = w_r·R + w_s·S + w_c·C + w_x·X + w_j·J' + w_a·A`，其中两项对库内文献只能取**边界值**——
+不是「没有值」，是它们的定义在库内就落在这里：
 
-| 项 | 为什么不能用 |
-|---|---|
-| `R` 检索排名 | 库内文献不在任何检索结果集里，没有 rank |
-| `S` 库内相似度 | 「与库内文献的最大相似度」对库内文献本身恒 ≈ 1，等于白送 |
+| 项 | 库内取值 | 为什么 |
+|---|---|---|
+| `R` 检索排名 | **0** | 库内文献不在任何检索结果集里，没有排名信息 |
+| `S` 库内相似度 | **1** | 「与库内文献的最大相似度」对库内文献本身**恒等于 1**（它和自己最像） |
 
-所以这里把这两项**置 0**，把剩下的 `C / X / J' / A` **按原比例重新归一化到 1**，再乘
-新鲜度加成。量纲与日报接近但**不是同一个数**，别拿两边直接比大小。
-四个分量都**复用 `daily_digest.py` 的函数**（`citation_term` / `classic_term` /
-`journal_term` / `freshness` / `final_score`），保证与日报同源、不会两套公式漂移。
+所以这里**直接调用** `daily_digest.final_score()`，权重由 `scoring_weights()` 原样返回
+（**不**把 `C/X/J'/A` 重新归一化——那是 ≤2026-09-21 的旧做法）。一句话读得出来：
 
-`C` 是真有信号的：实测 184 篇里 **127 篇被库内其他文献引用过**，被引最多的正是
-VASP / PBE / Sun 的 Ni-rich 综述这类骨架文献。实测分数区间 **-0.069 – 0.669、中位 0.30**；
-**允许负分**（J' 的零点在 IF=6，低 IF 刊 + 0 被引 + 无库内引用的新文会落到 0 以下，
-实测 5/187 篇）——没有截断，因为截断会让整个底部并列在 0、丢掉区分度。
+    推荐分 = 「假设这篇是候选、且语义完全贴合我的库，日报会给它多少分」+ 出度加分
+
+2026-09-22 又加了一项**库内专有**的加法项（日报没有）：
+
+    final = (B + w_o·O) · (1 + f_gain·F) ×（种子 ? score_mult : 1）
+    O     = min(1, (k / max(n_ref, o_ref_floor)) / o_sat)
+      k      = 该文参考文献里**落在库内**的篇数
+      n_ref  = 它的参考文献总条数（分母有下限 o_ref_floor，防小分母放大）
+    w_o=0.06、o_ref_floor=20、o_sat=0.25，都在 runtime.json 的 scoring 段
+
+**为什么用比例而不是条数**：实测出度与「参考文献总条数」正相关 **+0.406**——直接数条数的话，
+综述与长参考文献表恒占优（实测：出度 22 的那篇有 277 条参考文献、库内只占 7.9%；出度 23 的
+那篇只有 48 条、占 **47.9%**，后者才是真正贴着本库写的）。它与 `C` 的 `n` **弱负相关（−0.151）**，
+所以不是重复计分：`C` 高的是被本库反复引用的老经典，`O` 高的是「刚入库不久、把本库引了个遍」
+的近期工作。
+
+好处是**两边共用一张权重表**：改 `runtime.json` 的 `scoring` 段，日报与推荐分一起动；
+在此之前两边是两张皮（实测区间 −0.069 – 0.672 对不上日报的 0.047 – 0.520），没法直接比大小。
+代价：`S=1` 会跟着新鲜度倍数一起放大，**新文献被抬得更多**（符合本库不给年龄扣分的口径），
+所以换公式后排序变了——实测 54 篇位移 >10 位。七个分量都**复用 `daily_digest.py` 的函数**
+（`citation_term` / `classic_term` / `journal_term` / `freshness` / `final_score`），不会漂移。
+
+`C` 是真有信号的：实测 193 篇里 **131 篇被库内其他文献引用过**，被引最多的是
+「Comparison of the structural and electrochemical properties…」（43 篇）、Ni-rich 综述（38 篇）
+与 VASP/PBE 这类方法学骨架文献。加上出度项后实测区间 **0.217 – 0.625、中位 0.404**，**恒为正**，
+所以 Extra 列的字面排序与数值序一致（旧数据里的负分才需要认数字）。
 
 **写进哪里**：条目的 `extra` 里一行 `推荐分: 0.312`。**`Extra` 是 Zotero 的原生列**
 （条目列表表头右键 → 列 → 勾上 Extra），点表头可排序。定长三位小数让**正分**的字符串
@@ -970,6 +1036,11 @@ raw 源码核对，仓库名均已验在）。**结论：没有覆盖全链路�
 
 - 总结和综述用中文，数值必须具体，原文没给的写「未报道」，不推测
 - 脚本一律**幂等 + 可续跑**（已完成的跳过），输出到 `logs/`
+- **CLI 纪律（2026-09-22 起）**：所有脚本的 `-h` / `--help` **只打印用法、退出 0**；**认不出的
+  `--xxx` 一律报错退出 2**，绝不静默忽略；用 `argparse` 的脚本全部关掉前缀缩写（`--f` 不再等于 `--force`）。
+  这条是拿事故换来的：此前 `embed_figures.py`、`apply_to_zotero.py`、`mineru_batch.py`、`summarize_batch.py`
+  都把 `--` 开关静默丢掉，于是敲 `--help` 会**真跑**（2026-09-21 因此误写了两篇 `summary.md`、
+  误发了一封日报邮件），而 `send_digest.py --f` 会**真发信**。
 - 对 Zotero 的批量写入以**纯新增**为默认；删除只有两条路：条目/目录/重复项走
   `scripts/tidy.py`，**标签改名与游离标签清理**走 `scripts/migrate_labels.py`。
   两者都先导出全量备份到 `state/` 再动手；`DELETE` 是硬删除、没有回收站兜底

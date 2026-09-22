@@ -43,6 +43,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 路径里的非 GBK 字符会抛
+# UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding——编不出来时
+# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本不 import 任何本地模块，
+# 所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 STAGE = ROOT / "state" / "work" / ".dist_build"
 DEST = ROOT / "release"

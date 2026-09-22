@@ -171,3 +171,93 @@ jobs:
             python "$d/scripts/runtime.py" > /dev/null
             python "$d/scripts/doctor.py" --help
           done
+
+      # ── 这一步存在的理由 ──────────────────────────────────────────────
+      # 上面那步跑的都是 `--help > /dev/null`：argparse 在 parse 阶段就退出，
+      # **测不到控制台编码**——而这正是 Windows 上最容易静默出问题的一环。
+      # 2026-09-21 实测（Linux 上用 PYTHONIOENCODING 复现 cp936）：把文献数据原样
+      # print 出去会直接崩，`digest.py` 报 `UnicodeEncodeError: 'gbk' codec can't
+      # encode character '\xc5'`（标题里的 Å），`sync_properties.py` 报 `'\xf6'`
+      # （作者里的 ö）。两个要点别记错：
+      #   ① 崩的**不是 emoji，是数据里的非 GBK 字符**（Å / ö / Π 这类），静态扫
+      #      脚本里的 ✅ ⚠️ 会高估；② **不只是重定向**，直接打控制台一样崩。
+      # 兜底写在 zapi / topic / find_new / sync_properties 四个被 import 的模块里
+      # （`sys.stdout.reconfigure(errors="replace")`，import 即生效，与 zapi.py 顶部
+      # 那段 IPv4 补丁同一套路），外加不 import 本地模块的几个脚本各自一份。
+      # 本步用 PYTHONIOENCODING=cp936 把 Windows 的行为在 Linux 上也复现（cp936 是
+      # 内置编码，两个 runner 都有），逐个 import（**不执行 main**）后 print 一段
+      # 非 GBK 语料，断言：① 退出码 0；② 输出里不出现 UnicodeEncodeError。
+      # 注意本步考的是「整条 import 链上有没有兜底」，不是逐脚本覆盖率——要逐脚本隔离
+      # 得一个脚本起一个进程；这里 import 全部之后才 print，第一个装上兜底的模块就会
+      # 把错误策略定下来。下面额外断言四个 hub 里至少有一个 import 成功，否则这次
+      # print 其实什么都没考。
+      # import 本身因缺 state/、缺依赖失败属正常（CI 里没有 Zotero / papers / 令牌），
+      # 用 try 包住跳过；**唯独 UnicodeEncodeError 不吞**——那正是本步要抓的。
+      - name: 控制台编码冒烟（PYTHONIOENCODING=cp936 下 print 非 GBK 语料）
+        shell: bash
+        env:
+          PYTHONIOENCODING: cp936
+        run: |
+          set -e
+          for d in linux windows; do
+            echo "════════ $d ════════"
+            out=$(mktemp)
+            rc=0
+            python - "$d" > "$out" 2>&1 <<'PY' || rc=$?
+          import importlib, pathlib, sys
+
+          tree = sys.argv[1]
+          sys.path.insert(0, str(pathlib.Path(tree, "scripts")))
+          files = sorted(pathlib.Path(tree, "scripts").glob("*.py"))
+
+          # 2026-09-22 起 `sync_classification.py` 把顶层计算与写盘收进了 main()，
+          # import 不再重写 `分类与标签总表.md`，所以这步可以覆盖全部脚本。
+          # 保留 SKIP 这个机制（空集），以后真遇到「import 即写文件」的脚本再往里加。
+          SKIP = set()
+          # 装了兜底的模块：至少要有一个真的 import 进来，否则下面的 print 没考到东西
+          HUBS = {"zapi", "topic", "find_new", "sync_properties"}
+          # 语料刻意含 GBK 编不出的字符：Å(化学元素/作者名里常见) ö Π ✅ ⚠️ ≈ → ℃
+          CORPUS = "Å ö Π ✅ ⚠️ ≈ → ℃ 结构退化 LiNi0.8Co0.1Mn0.1O2 mAh/g"
+
+          ok, skipped, hubs_ok = 0, [], []
+          for f in files:
+              if f.name in SKIP:
+                  skipped.append(f"{f.name}(writes a file at import)")
+                  continue
+              try:
+                  importlib.import_module(f.stem)
+                  ok += 1
+                  if f.stem in HUBS:
+                      hubs_ok.append(f.stem)
+              except UnicodeEncodeError:
+                  raise                     # ← 本步唯一要抓的错误，绝不吞
+              except BaseException as e:     # 缺 state/ 缺依赖等都算正常，跳过
+                  skipped.append(f"{f.name}({e.__class__.__name__})")
+
+          # 下面这些行**只用 ASCII 打印**：本步把 stdout 钉成了 cp936，中文打出来在
+          # GitHub 的 UTF-8 日志里是乱码；更要紧的是，一旦兜底没了，print 本身就可能抛
+          # UnicodeEncodeError，那会把「hub 没导入」的真正原因淹掉。
+          print(f"imported {ok}/{len(files)} scripts, skipped {len(skipped)}:")
+          for s in skipped:
+              print(f"  - {s}")
+          if not hubs_ok:
+              print(f"ERROR: none of {sorted(HUBS)} could be imported -- "
+                    f"the import chain that installs the fallback was not exercised")
+              sys.exit(2)
+          print(f"guard-bearing modules loaded: {', '.join(sorted(hubs_ok))}")
+          print(f"sys.stdout.encoding={sys.stdout.encoding} errors={sys.stdout.errors}")
+          print("--- corpus (non-GBK chars must degrade to '?', never raise) ---")
+          print(CORPUS)
+          print("--- end of corpus ---")
+          PY
+            cat "$out"
+            if [ "$rc" -ne 0 ]; then
+              echo "❌ $d: 退出码 $rc（要求 0）"; rm -f "$out"; exit 1
+            fi
+            if grep -q "UnicodeEncodeError" "$out"; then
+              echo "❌ $d: 输出里出现 UnicodeEncodeError——控制台编码兜底丢了吗？"
+              rm -f "$out"; exit 1
+            fi
+            rm -f "$out"
+            echo "✅ $d: 退出码 0，输出里没有 UnicodeEncodeError"
+          done

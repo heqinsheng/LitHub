@@ -11,7 +11,9 @@ runtime.json 里写明分类名。
     schedule  跑多勤：enabled / every_n_days（daily_digest.py 的频率闸门读它）
     digest    版面与门槛：篇数 / fresh 窗口 / 年份下限 / 冷却期 / 分数门槛 / 分类保底 / 模型
     pool      检索池：缓存刷新周期 / Crossref 每页条数 / fresh 与 query 的页数
-    scoring   打分权重与各分量常数（daily_digest.py 的 W_R…C_AGE_TAU_Y）
+    scoring   打分权重与各分量常数（daily_digest.py 的 W_R…C_AGE_TAU_Y；
+              w_o / o_ref_floor / o_sat 是 score_library.py 出度项 O 的参数，
+              不参与权重归一化）
     email     日报发信（scripts/send_digest.py）：收件人 / SMTP 主机端口 / 主题模板。
               **密码不在这个文件里**——读 state/smtp_password（chmod 600），
               因为这个 json 是要进复现包给别人的。
@@ -67,6 +69,9 @@ DEFAULTS = {
         "w_x": 0.20,
         "w_j": 0.13,
         "w_a": 0.05,
+        "w_o": 0.06,
+        "o_ref_floor": 20,
+        "o_sat": 0.25,
         "f_gain": 0.35,
         "f_half_life": 180.0,
         "x_sat": 5001.0,
@@ -87,6 +92,11 @@ DEFAULTS = {
         "use_ssl": True,
         "subject": "文献日报 {date}（{n} 篇）",
     },
+    # 种子文献（classification.json 里 seed: true 的条目）在打分上的两张杠杆
+    "seed": {
+        "citer_boost": 2.0,
+        "score_mult": 1.3,
+    },
 }
 
 # 字段表 {段: {键: (类型, 下限, 上限)}}，None = 该侧不限。键名即白名单：不在这里的键一律报错。
@@ -96,6 +106,10 @@ _SCHEMA = {
     "schedule": {
         "enabled": ("bool", None, None),
         "every_n_days": ("int", 1, None),
+    },
+    "seed": {
+        "citer_boost": ("float", 0.0, None),
+        "score_mult": ("float", 0.0, None),
     },
     "digest": {
         "limit": ("int", 1, None),
@@ -120,6 +134,9 @@ _SCHEMA = {
         "w_x": ("float", 0.0, None),
         "w_j": ("float", 0.0, None),
         "w_a": ("float", 0.0, None),
+        "w_o": ("float", 0.0, None),
+        "o_ref_floor": ("int", 0, None),
+        "o_sat": ("float", 0.0, None),
         "f_gain": ("float", 0.0, None),
         "f_half_life": ("float", 0.0, None),
         "x_sat": ("float", 0.0, None),
@@ -211,13 +228,11 @@ def _load():
         cfg[sec] = {k: _check(f"{sec}.{k}", spec, block.get(k, DEFAULTS[sec][k]))
                     for k, spec in fields.items()}
 
-    # 权重不变量只警告、不报错：这两条都还有救，但要让人看见。
+    # 权重不变量只警告、不报错：它还有救，但要让人看见。
+    # （原先还有一条「w_r+w_c+w_x+w_j+w_a ≈ 1.0」——归一化之后总分恒落在 [0,1]，
+    #   那条已经没有意义，2026-09-21 删掉。）
     s = cfg["scoring"]
-    total = s["w_r"] + s["w_c"] + s["w_x"] + s["w_j"] + s["w_a"]
     warn = []
-    if abs(total - 1.0) > 0.01:
-        warn.append(f"scoring 的 w_r + w_c + w_x + w_j + w_a = {total:.3f}，偏离 1.0 超过 0.01："
-                    f"不含 S 与 F 的基线分不再落在 [0,1]，--min-score 的门槛刻度跟着变")
     if s["w_s"] > s["w_r"]:
         warn.append(f"scoring 的 w_s={s['w_s']:.3f} > w_r={s['w_r']:.3f}：有 S 时 R 的份额是 "
                     f"w_r−w_s={s['w_r'] - s['w_s']:.3f}，已经归零或为负，请保证 w_s ≤ w_r")
@@ -230,6 +245,7 @@ SCHEDULE = _cfg["schedule"]
 DIGEST = _cfg["digest"]
 POOL = _cfg["pool"]
 SCORING = _cfg["scoring"]
+SEED = _cfg["seed"]
 EMAIL = _cfg["email"]
 
 

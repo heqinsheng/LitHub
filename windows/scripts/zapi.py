@@ -13,7 +13,19 @@
 判写入是否成功看响应的 `successful`（HTTP 200 也可能是 `unchanged` 的静默失败），
 取 key 用 `success` —— 两者的区别见 帮助手册.md §7.5。
 """
-import json, os, socket, time, urllib.parse, urllib.request, urllib.error
+import json, os, socket, sys, time, urllib.parse, urllib.request, urllib.error
+
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 文献数据里的 Å / ö / Π
+# （标题、作者、图注里很常见）会抛 UnicodeEncodeError，输出断在半路（实测
+# digest.py、sync_properties.py 都这么挂过）。只放宽错误策略、不改 encoding——
+# 编不出来时退化成 "?"，UTF-8 环境下的输出字节一个都不变。与下面那段 IPv4 补丁
+# 同一套路：import 本模块即生效，不必每个调用方各写一遍。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
 
 # ── 强制 IPv4 ──────────────────────────────────────────────────────────
 # 本机曾出现「有全局 IPv6 地址与默认路由但实际 100% 丢包」；Python 没有 curl

@@ -185,7 +185,8 @@ def creator_fill(d, m):
 # ────────────────────────────────────────────── 主流程
 
 def main():
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，不能当真开关执行
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--apply", action="store_true", help="写回 Zotero（默认只报告）")
     ap.add_argument("--key", default="", help="只处理这一条")
     ap.add_argument("--limit", type=int, default=0)

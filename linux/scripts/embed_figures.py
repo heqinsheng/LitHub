@@ -21,6 +21,17 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 里的 Å / ö / Π / ✅ 会抛
+# UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding——编不出来时
+# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本不 import 任何本地模块，
+# 所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 MANIFEST = os.path.join(ROOT, "state", "manifest.json")
@@ -256,7 +267,32 @@ def process(rec):
     return key, f"ok({len(items)}图{',裁掉超限%d张' % cut if cut > 0 else ''})", time.time() - t0, bad
 
 
+USAGE = """用法: embed_figures.py <并发> [KEY,KEY...] [--force] [--dry-run]
+  <并发>       并发数（默认 3）
+  KEY,KEY...   只处理这些 8 位 Zotero key（逗号分隔；不给则处理 manifest 里全部）
+  --force      已带「关键图表」节的也重做
+  --dry-run    只打印将要做的改动，不调模型、不写文件
+  -h, --help   打印本用法，不做任何事"""
+
+
+def _guard_argv(argv, usage, known=()):
+    """参数护栏：`--help` 只打印用法、认不出的 `--` 开关报错退出 2，两者都不做事。
+
+    本脚本原先把 `--` 开头的 token 一律丢掉，于是 `--help`（以及任何打错的开关）
+    会**静默开始干活**——实测 `--help` 真的写了一整轮「关键图表」，改的是 papers/ 里的文件。
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    bad = sorted({a for a in argv if a.startswith("--") and a.split("=", 1)[0] not in set(known)})
+    if bad:
+        print(usage, file=sys.stderr)
+        print(f"认不出的开关：{' '.join(bad)}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
+    _guard_argv(sys.argv[1:], USAGE, known=("--force", "--dry-run"))
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     workers = int(args[0]) if args else 3
     only = args[1].split(",") if len(args) > 1 else None

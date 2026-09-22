@@ -79,7 +79,30 @@ def get_all(path, **p):
     return out
 
 
+USAGE = """用法: apply_to_zotero.py [--dry-run]
+  （无位置参数）
+  --dry-run   只打印将要做的改动，不写 Zotero
+  -h, --help  打印本用法，不做任何事"""
+
+
+def _guard_argv(argv, usage, known=()):
+    """参数护栏：`--help` 只打印用法、认不出的 `--` 开关报错退出 2，两者都不做事。
+
+    本脚本原先把 `--` 开头的 token 一律丢掉，于是 `--help` 会**真的写一次 Zotero**
+    （建目录、打标签、改条目）。
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    bad = sorted({a for a in argv if a.startswith("--") and a.split("=", 1)[0] not in set(known)})
+    if bad:
+        print(usage, file=sys.stderr)
+        print(f"认不出的开关：{' '.join(bad)}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
+    _guard_argv(sys.argv[1:], USAGE, known=("--dry-run",))
     if not os.path.exists(KEYFILE):
         sys.exit(f"缺少本地 API 密钥文件 {KEYFILE}")
     cls = json.load(open(os.path.join(ROOT, "state", "classification.json"), encoding="utf-8"))
@@ -176,12 +199,14 @@ def main():
         tags += [f"耦合:{cp}" for cp in (c.get("coupling") or []) if cp in COUPLING]
         if c.get("is_review"):
             tags.append("综述")
+        if c.get("seed"):
+            tags.append("种子")
         cols = []
         for s in (c.get("sub") or []):
             p = sub2parent.get(s)
             if p and f"{p}/{s}" in ckey:
                 cols.append(ckey[f"{p}/{s}"])
-        if c["primary"] in ckey:
+        if c.get("primary") in ckey:
             cols.append(ckey[c["primary"]])
         sec = c.get("secondary")
         if sec:
@@ -190,6 +215,8 @@ def main():
                 cols.append(ckey[sec])
         if c.get("is_review") and "综述" in ckey:
             cols.append(ckey["综述"])
+        if c.get("seed") and "种子文献" in ckey:
+            cols.append(ckey["种子文献"])
         plans[c["key"]] = {"tags": sorted(set(tags)), "cols": sorted(set(cols))}
 
     # ---------- 3. 写入 ----------

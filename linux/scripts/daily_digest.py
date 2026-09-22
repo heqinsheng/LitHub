@@ -184,6 +184,8 @@ import runtime as _rt  # noqa: E402
 # B = WR·R + WS·S + WC·C + WX·X + WJ·J' + WA·A，final = B·(1 + F_GAIN·F)，综述 ×0.9
 # R 的 0.40 在有 S 时拆成 R 0.25 + S 0.15；S 用不了时那 0.15 必须回补给 R（唯一
 # 一处表达这个机制的地方是 scoring_weights），否则总分尺度整体变小、门槛与排名全偏。
+# scoring_weights 再把这六项除以 WR+WC+WX+WJ+WA，使 B 恒落在 [0,1]（等比缩放，
+# 不改变任何排名）——理由与那一条分母的取法见该函数。
 # 权重与各分量的常数都取自 config/runtime.json 的 scoring 段（默认值与原硬编码一致），
 # 变量名保持不变，下面各处的公式只认这些名字。
 _WS_CFG = _rt.SCORING
@@ -1079,19 +1081,48 @@ def gate_candidates(res, cat, pool, pool_titles, lib_dois, recs, today, cooldown
     return n
 
 
-def citation_term(citers, weights, w_max, doi2key, key2primary, doi_year, today_d,
-                  tau_years=C_AGE_TAU_Y, age_floor=C_AGE_FLOOR):
-    """C = min(1, ln(1+n)/ln(31)) · (0.65+0.35·q̄) · (0.75+0.25·r̄)。
+_SEED_KEYS_CACHE = None
 
-    n  = 被几篇库内文献引用（主信号，对数饱和：n=1→0.20、n=10→0.69、n=30→1.00）
-    q̄  = 引用者的平均分类权重比（w_i/w_max），联不上分类的用已联表者的平均
-    r̄  = 引用者的平均 exp(-Δy/tau)，Δy 是引用者年龄、单位**年**（tau 默认 3 年）
+
+def seed_keys():
+    """`classification.json` 里 `seed: true` 的条目，返回 Zotero key 的集合。
+
+    「种子文献」是跨主题标记（也写 `种子` 标签、归入 `种子文献` 目录，见 AGENTS.md 的
+    「标签轴」）。在打分里它只影响 `citation_term`：**种子的引用一票算几票**
+    （`config/runtime.json` 的 `seed.citer_boost`）。缓存一次，别每个候选都读盘。
+    """
+    global _SEED_KEYS_CACHE
+    if _SEED_KEYS_CACHE is None:
+        try:
+            cls = json.loads((STATE / "classification.json").read_text(encoding="utf-8"))
+            _SEED_KEYS_CACHE = {c["key"] for c in cls if c.get("key") and c.get("seed")}
+        except Exception as e:
+            log(f"  ! 读 classification.json 取种子集失败（{e}），本轮按「没有种子」处理")
+            _SEED_KEYS_CACHE = set()
+    return _SEED_KEYS_CACHE
+
+
+def citation_term(citers, weights, w_max, doi2key, key2primary, doi_year, today_d,
+                  tau_years=C_AGE_TAU_Y, age_floor=C_AGE_FLOOR, seeds=None):
+    """C = min(1, ln(1+n_eff)/ln(31)) · (0.65+0.35·q̄) · (0.75+0.25·r̄)。
+
+    n      = 被几篇库内文献引用（主信号，对数饱和：n=1→0.20、n=10→0.69、n=30→1.00）
+    n_eff  = n + (boost−1)·n_seed —— **种子的引用一票算 boost 票**（`seed.citer_boost`，
+             1.0 = 不特殊对待）。这是「更优先捞被种子引用过的文献」的杠杆：它作用在被引
+             篇数的饱和项上，不动 q̄/r̄ 的口径，C 仍封在 [0,1]，`--min-score` 的刻度不变。
+    q̄      = 引用者的平均分类权重比（w_i/w_max），联不上分类的用已联表者的平均
+    r̄      = 引用者的平均 exp(-Δy/tau)，Δy 是引用者年龄、单位**年**（tau 默认 3 年）
     年龄项被地板 age_floor（默认 0.75）限住，最多只做 25% 的调节：旧公式的
     Σ exp(-age_i/730天)/4 让 10 年前的引用只剩 0.7% 权重，实际上把「被多少篇
     库内文献引用」退化成了年龄惩罚，这才是老经典掉分的根源。
     引用者年份按当年 7 月 1 日近似；年份缺失的用已知者的平均年龄。
+
+    `seeds` 不给就用 `seed_keys()`（本模块那个带缓存的函数）——**参数不能叫
+    `seed_keys`，会遮住同名函数**（2026-09-21 踩过）。
     """
+    seeds = seed_keys() if seeds is None else seeds
     n = len(citers)
+    n_seed = sum(1 for d in citers if (doi2key.get(d) or "") in seeds)
     known_w, known_age = [], []
     for d in citers:
         cat = key2primary.get(doi2key.get(d) or "")
@@ -1121,7 +1152,8 @@ def citation_term(citers, weights, w_max, doi2key, key2primary, doi_year, today_
     if not n:
         return 0.0, n_w, n_y
     q_bar, r_bar = q_sum / n, r_sum / n
-    base = min(1.0, math.log1p(n) / math.log(C_N_SAT))
+    n_eff = n + (max(_rt.SEED["citer_boost"], 0.0) - 1.0) * n_seed
+    base = min(1.0, math.log1p(max(n_eff, 0.0)) / math.log(C_N_SAT))
     return (base * (C_W_FLOOR + (1.0 - C_W_FLOOR) * q_bar)
             * (age_floor + (1.0 - age_floor) * r_bar)), n_w, n_y
 
@@ -1312,14 +1344,25 @@ def sim_stats():
 
 # ---------------------------------------------------------------- 打分
 def scoring_weights(use_s):
-    """本次运行生效的打分权重：S 用不了时把它的 0.15 **回补给 R**。
+    """本次运行生效的打分权重：S 用不了时把它的 0.15 **回补给 R**，最后整体归一化到 1。
 
     只在主流程按 sim_probe() 的结果算一次再往下传，不写成两套散落的常量——同一批
     候选在不同机器（装没装 sentence-transformers）上必须落在同一个分数尺度上，
     否则 --min-score 门槛与版面排名会随机器变。
+
+    归一化除的是 **WR+WC+WX+WJ+WA**（不含 S），两种情况共用同一个分母：
+    有 S 时 R+S = WR，没 S 时 R = WR，于是 B 的上界都是 1.0。旧写法不除，B 的上界
+    只是这几个权重之和（实测 0.86），分数整体偏低 14%，`--min-score` 的刻度也跟着偏。
+    这是纯等比缩放，**所有排名一个都不变**；改完只需重新标定 `--min-score`。
     """
-    return {"R": W_R - W_S if use_s else W_R, "S": W_S if use_s else 0.0,
-            "C": WC, "X": WX, "J": WJ, "A": WA}
+    tot = W_R + WC + WX + WJ + WA
+    if tot <= 0:
+        raise ValueError(
+            f"{_rt.PATH} 的 scoring 段：w_r + w_c + w_x + w_j + w_a = {tot:g}，"
+            f"归一化要拿它当分母，请至少给其中一项正的权重")
+    return {"R": (W_R - W_S) / tot if use_s else W_R / tot,
+            "S": W_S / tot if use_s else 0.0,
+            "C": WC / tot, "X": WX / tot, "J": WJ / tot, "A": WA / tot}
 
 
 def base_score(r, sc):
@@ -1334,9 +1377,14 @@ def pre_score(r, sc):
             + sc["X"] * r["X"] + sc["J"] * r["J"])
 
 
-def final_score(r, sc):
-    """B * (1 + F_GAIN*F)；综述 ×0.9。"""
-    s = base_score(r, sc) * (1.0 + F_GAIN * r["F"])
+def final_score(r, sc, bonus=0.0):
+    """(B + bonus) * (1 + F_GAIN*F)；综述 ×0.9。
+
+    `bonus` 是**归一化集合之外**的加分，加在括号里（新鲜度倍数之内），所以会跟着 F 与
+    综述折扣一起缩放。目前只有 score_library.py 的 `w_o·O`（出度：这篇引用了多少比例
+    的库内文献）用它；日报自己的调用点一律不传，默认 0 = 原行为。
+    """
+    s = (base_score(r, sc) + bonus) * (1.0 + F_GAIN * r["F"])
     if r["cls"]["is_review"]:
         s *= 0.9
     return s
@@ -1392,6 +1440,9 @@ def diag_pagination(queries, a, since, lib_dois, recs, today, known, log):
 
 def main():
     ap = argparse.ArgumentParser(
+        # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，
+        # 不能当真开关执行
+        allow_abbrev=False,
         description="每日文献日报。运行参数的默认值来自 config/runtime.json，"
                     "想确认生效值用 --show-config。")
     ap.add_argument("--days", type=int, default=_rt.DIGEST["days"],

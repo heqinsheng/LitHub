@@ -1,9 +1,9 @@
 # 在 Windows 上跑 LitHub
 
-> ⚠️ **先说清楚现状**：代码已做 Windows 适配（文件读写与子进程强制 UTF-8、命令行长度按
-> 平台取阈值、路径全部走 `os.path.join`），**但作者手上没有 Windows 机器，整条路径没有实测过**。
-> 本文按「照做」的顺序写，**本文里的每一步都未经作者验证**。跑通或跑不通都欢迎开 issue
-> 把 `python scripts\doctor.py` 的完整输出贴上来。
+> ⚠️ **先说清楚现状**：代码已做 Windows 适配（文件读写与子进程强制 UTF-8、控制台输出
+> 的编码兜底、命令行长度按平台取阈值、路径全部走 `os.path.join`），**但作者手上没有
+> Windows 机器，整条路径没有实测过**。本文按「照做」的顺序写，**本文里的每一步都未经
+> 作者验证**。跑通或跑不通都欢迎开 issue 把 `python scripts\doctor.py` 的完整输出贴上来。
 
 Windows 上有两条路，**先试第一条**：
 
@@ -114,16 +114,21 @@ pdfinfo -v
 pdftotext -v
 ```
 
-### B3. Ghostscript（提供 `gs`）
+### B3. Ghostscript（提供 `gswin64c`）
 
 官网安装包：<https://www.ghostscript.com/releases/gsdnld.html>（选 Windows 64-bit）。
 安装程序默认把它写进 PATH；装完**重开终端**验证：
 
 ```powershell
-gs --version
+gswin64c --version
 ```
 
+⚠️ **Windows 包给的是 `gswin64c.exe`（控制台版），没有 `gs.exe`**——Linux 上那个
+`gs` 命令才是这个名字。脚本两处都认（`gs` → `gswin64c` 依次探测），但你自己敲命令验证时
+要用 `gswin64c`；`gs --version` 报「找不到」并不代表没装好。
+
 > 只有 MinerU 的 `--flash` 兜底模式（>8 MB 预压缩）才用它；默认的 `extract` 模式不需要。
+> 没装、或压不到 8 MB 以内时，`mineru_batch.py` **只跳过那一篇**并写明原因，不会中断整轮。
 
 ### B4. MinerU CLI
 
@@ -214,23 +219,50 @@ curl -s -X POST http://127.0.0.1:23119/api/local/authorize \
 ### B7. 终端编码
 
 Windows 中文环境的 Python 默认编码是 **cp936 (GBK)**。仓库里所有写文本的地方都显式带了
-`encoding="utf-8"`（日志、配置、Markdown 都在内），所以文件读写不依赖它；但**输入输出**
-与第三方工具仍可能踩：
+`encoding="utf-8"`（日志、配置、Markdown 都在内），所以**文件读写不依赖它**；踩坑的地方在
+**往控制台/管道输出**这一侧。
 
-```powershell
-chcp 65001          # 当前控制台切 UTF-8（每个新窗口都要重来）
+**真正会崩的是什么**（2026-09-21 实测，用 `PYTHONIOENCODING=cp936` 在 Linux 上复现）：
+
+```
+$ python3 scripts/digest.py
+UnicodeEncodeError: 'gbk' codec can't encode character '\xc5' in position 248
+$ python3 scripts/sync_properties.py
+UnicodeEncodeError: 'gbk' codec can't encode character '\xf6' in position 37
 ```
 
-更保险的是让 Python 整个跑在 UTF-8 模式下（PEP 540），一次设定，所有脚本和子进程都受益：
+崩的**不是 emoji**（`✅ ⚠️` 只是偶尔出现在个别输出行上），是**文献数据原样打进控制台**：
+标题里的 `Å`、作者里的 `ö`、标题里的 `Π` 这类**非 GBK 字符**。而且**不只是重定向**——
+直接打在控制台上一样崩（上面两条就是直接跑出来的），别以为「控制台走 Unicode API 就没事」。
+
+**现在的处置（不需要你做任何事）**：脚本一律把输出流的错误策略放宽成
+`errors="replace"`，编不出来的字符退化成 `?`，不再中断：
+
+```
+? ? Π ≈ → ℃ 结构退化 …        # Å / ö / ✅ / ⚠️ 变成 ?，其余原样
+```
+
+兜底写在四个被普遍 import 的模块里（`zapi.py` / `topic.py` / `find_new.py` /
+`sync_properties.py`，与 `zapi.py` 顶部那段 IPv4 补丁同一套路：import 即生效），
+另外不 import 本地模块的几个脚本（`digest.py`、`embed_figures.py`、`mineru_batch.py` 等）
+各自带一份。**它只改错误策略、不改编码**：UTF-8 环境下的输出字节一个都不变，所以 Linux
+侧的行为没有任何变化。CI 里加了一步冒烟（`.github/workflows/ci.yml` 的
+「控制台编码冒烟」）：在 cp936 下 import 全部脚本后 print 一段非 GBK 语料，断言退出码 0
+且输出里没有 `UnicodeEncodeError`。
+
+> 代价：cp936 下那些字符在终端里显示成 `?`，信息有损（但不再崩）。
+
+**想看到真字符（改善，不是必需）**：把 Python 整个跑在 UTF-8 模式下（PEP 540），
+一次设定，所有脚本和子进程都受益：
 
 ```powershell
+chcp 65001                   # 当前控制台切 UTF-8（每个新窗口都要重来）
 $env:PYTHONUTF8 = "1"        # 当前会话
 setx PYTHONUTF8 1            # 永久（新开终端起效）
 ```
 
-为什么值得设：仓库脚本里有 `✅ ⚠️ → ≈` 这类字符，cp936 编不出来。往**控制台**打没问题
-（Windows 的控制台走 Unicode API），但把输出**重定向到文件**时会按 cp936 编码，
-遇到这些字符可能报 `UnicodeEncodeError`。设了 `PYTHONUTF8=1` 就没有这个问题。
+设了之后不再有 `?`，中文与 Å/ö/Π/✅ 都原样显示。**在加兜底之前这一步是「必需」，现在是
+「想看得更清楚」**——不设也不会再有任何脚本因为编码报错退出。
 
 ### B8. 长路径（重要）
 
@@ -241,8 +273,11 @@ C:\Users\<你>\LitHub\papers\24LAL9CS_ΠConjugated_Polyphenols_Regulate_Interfac
                           └────── 8 位 key + 60 字标题 slug ──────┘        └─ 64 位 hash ─┘
 ```
 
-反斜杠后的典型长度约 **177 字符**（`papers\<8位key>_<60字slug>\images\<64位hash>.jpg`），
-加上 `C:\Users\你的名字\LitHub` 就很接近 260 了。`doctor.py` 会把这台机器的实际数字算给你看。
+反斜杠后的**最长相对路径实测 152 字符**（2026-09-21 在 193 篇的库上量的：
+`papers\<8位key>_<60字slug>\images\<64位hash>.jpg`，其中目录名 69 + 图片名 68 已是上限），
+加上 `C:\Users\你的名字\LitHub`（典型 24–28 字符）**总长 176–180，离 260 还有约 80 字符余量**。
+`doctor.py` 会把这台机器的实际数字算给你看——想稳妥就直接按下面开长路径，但这一项**不是**
+必须先解决的拦路虎。
 
 两种开启方式，**选一种，然后重启**（改注册表后重启资源管理器还不够，安全起见重启系统）：
 
@@ -302,14 +337,30 @@ python scripts\doctor.py
 | `OSError: [WinError 3] 系统找不到指定的路径` | 路径超 260，或项目不在 `%USERPROFILE%\LitHub` | 见 B8 |
 | `文件名或扩展名太长` / `[Errno 2] No such file` 但文件明明在 | 同上（路径过长） | 见 B8 |
 | 一堆 `EXC(...)` 写不出总结 | LLM CLI 路径没设 | 设 `LITHUB_KIMI`，见 B5 |
+| `WinError 193「%1 不是有效的 Win32 应用程序」`（`summarize_batch.py` / `embed_figures.py`） | `LITHUB_KIMI` 指向了 `.cmd`/`.bat`——Windows 的 `CreateProcess` 不能直接执行批处理 | 改指向 `.exe`（`where.exe kimi` 列全部候选）；`doctor.py` 会对此单独报警 |
+| `mineru_batch.py` 报 `FAIL(超10MB，压不下或缺 gs…)` | `--flash` 模式下 PDF > 8 MB，而 Ghostscript 不在 PATH（Windows 上命令名是 `gswin64c`） | 见 B3 装好并重开终端；或改用默认的 `extract` 引擎（限 200 MB，不需要压缩）|
 | 连不上 Zotero（403 / 连接被拒） | 开关没勾 / Zotero 没开 | 见 B6；`doctor.py` 会直接指出是哪一种 |
 
 ### 已知的未解决问题
 
-- **整条流水线没有在 Windows 上跑通过**（作者无机器）。文件编码、子进程编码、命令行长度、
-  路径分隔符这几类是**按机制改的**，由 `.github/workflows/ci.yml` 在 `windows-latest` 上
-  验证「能编译、能导入、中文编码往返正确」；**Zotero / MinerU / LLM CLI 这三样在 CI 里没有**，
-  所以 CI 绿 ≠ 流水线通。
-- 仓库里若干脚本的 `print()` 会输出 `✅ ⚠️` 等字符：重定向到文件时若既没设
-  `PYTHONUTF8=1`、控制台又是 cp936，可能报 `UnicodeEncodeError`。设 `PYTHONUTF8=1` 可避开。
+- **整条流水线没有在 Windows 上跑通过**（作者无机器）。文件编码、子进程编码、控制台编码、
+  命令行长度、路径分隔符这几类是**按机制改的**，由 `.github/workflows/ci.yml` 在
+  `windows-latest` 上验证「能编译、能导入、中文编码往返正确、cp936 下 print 非 GBK 语料不炸」；
+  **Zotero / MinerU / LLM CLI 这三样在 CI 里没有**，所以 CI 绿 ≠ 流水线通。
+- ~~仓库里若干脚本的 `print()` 会输出 `✅ ⚠️` 等字符，重定向时可能报 `UnicodeEncodeError`~~
+  ——**2026-09-21 已修**，而且原来的描述并不准确。真相是：崩的不是 emoji，是**文献数据里的
+  非 GBK 字符**（标题的 `Å`、作者的 `ö`、标题的 `Π`），**直接打控制台与重定向都会崩**
+  （实测 `digest.py`、`sync_properties.py`）。现在全部脚本的输出流都设了
+  `errors="replace"`（编不出来退化成 `?`，UTF-8 环境字节不变），`PYTHONUTF8=1` 从「必需」
+  降为「想看到真字符的改善」。细节见 B7。
+- `make_release.py` 里那句 `subprocess.run([...], text=True)`（判定是否 git 工作树）
+  **没有显式 `encoding=`**，Windows 上按 locale（cp936）解码子进程输出。目前它的输出只有
+  ASCII（`true` / 空），实际不会出问题；记在这里是因为仓库其它子进程调用都显式写了
+  `encoding="utf-8"`，这一处是例外，改动它的人别以为是漏看。
+- **文件里带不带 `newline=""` 不一致**：只有 `sync_properties.py` 写 `summary.md` 时钉了
+  `newline=""`（怕 Windows 把 LF 翻成 CRLF，影响 git 与 Obsidian）；其余写 Markdown 的地方
+  （`daily_digest.py` 的日报、`embed_figures.py` / `summarize_batch.py` 的 `summary.md`、
+  `mineru_batch.py` 的 `paper.md`、`sync_classification.py` 的总表、`build_profile.py` 的画像）
+  在 Windows 上都会写成 **CRLF**。后果只是跨平台 git diff 噪声与行尾混用，读回时通用换行会
+  还原成 `\n`，不影响功能；**没有实测过**，也不打算为它加一层转换。
 - RSS 内存/句柄相关的行为差异没有评估过（本项目没有长驻进程，影响应该很小）。

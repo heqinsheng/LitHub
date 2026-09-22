@@ -61,6 +61,17 @@ def _v4(host, port, family=0, *a, **k):
 
 socket.getaddrinfo = _v4
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：日报正文里的 Å / ö / Π 会抛
+# UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding——编不出来时
+# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本只 import runtime.py，
+# 所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state"
 NEWS = ROOT / "文献日报"
@@ -168,8 +179,24 @@ def do_check(cfg, log, flush):
     return 0
 
 
+class _Parser(argparse.ArgumentParser):
+    """认不出的开关也要说人话，并与其它脚本保持同一套行为：用法行 + 退出码 2。
+
+    argparse 默认只打 "unrecognized arguments: --xxx"，看不出是被护栏拦下的；
+    报错路径不变，已知开关一律照旧。argparse 默认还允许**前缀缩写**
+    （`--f` 会被当成 `--force` 真发一封），所以 main() 里构造时显式传了
+    allow_abbrev=False。
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print(f"认不出的开关或有误的参数：{message}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
-    ap = argparse.ArgumentParser(
+    ap = _Parser(
+        allow_abbrev=False,
         description="把文献日报作为纯文本邮件发出去。收件人/服务器在 config/runtime.json "
                     "的 email 段，密码在 state/smtp_password。")
     ap.add_argument("--date", default="", help="发哪一天（默认今天）")

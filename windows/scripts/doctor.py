@@ -59,6 +59,12 @@ CLIS = [
                  "        装完确认 gswin64c 所在目录在 PATH 上，并**重开终端**"}),
 ]
 
+# 同一个工具的别名：Ghostscript 官方 Windows 包给的是 `gswin64c.exe`（控制台版），
+# **没有 gs.exe**，所以这项要按别名一起查——只查 "gs" 会在 Windows 上误报缺失。
+# mineru_batch.py 里也按同一顺序探测（shutil.which 会按 PATHEXT 试 .exe，而 Windows
+# 的 CreateProcess 只补 .exe、不认 .cmd，两者判据不同，别拿裸命令名去比）。
+CLI_ALIASES = {"gs": ("gswin64c",)}
+
 TIER = {
     "Linux": "✅ 作者主力环境，已实测",
     "Darwin": "⚠️ 应该可用（纯标准库 + 同样的外部 CLI），**未实测**",
@@ -172,13 +178,25 @@ def check_encoding(results, plat):
     return
 
 
+def which_cli(cmd):
+    """查命令在不在 PATH 上，带别名（见 CLI_ALIASES）。返回 (查到的名字, 路径) 或 None。"""
+    for name in (cmd,) + CLI_ALIASES.get(cmd, ()):
+        path = shutil.which(name)
+        if path:
+            return name, path
+    return None
+
+
 def check_clis(results, plat):
     for cmd, why, hints in CLIS:
-        path = shutil.which(cmd)
-        if path:
-            results.append(("ok", f"外部命令 {cmd} 在 PATH 上", [f"{path}（{why}）"]))
+        hit = which_cli(cmd)
+        if hit:
+            name, path = hit
+            note = f"（{cmd} 的别名，实际用的是它）" if name != cmd else ""
+            results.append(("ok", f"外部命令 {cmd} 在 PATH 上", [f"{path}{note}（{why}）"]))
         else:
-            results.append(("warn", f"外部命令 {cmd} 不在 PATH 上", [
+            alias = "".join(f" / {a}" for a in CLI_ALIASES.get(cmd, ()))
+            results.append(("warn", f"外部命令 {cmd}{alias} 都不在 PATH 上", [
                 f"用途：{why}", "安装方式：", "        " + hints[plat]]))
 
 
@@ -186,13 +204,24 @@ def check_llm(result_sink, plat):
     env = os.environ.get("LITHUB_KIMI")
     path = env or os.path.expanduser("~/.kimi-code/bin/kimi")
     if os.path.exists(path):
-        result_sink.append(("ok", "LLM CLI 存在", [f"{path}"
-                            + ("（来自 LITHUB_KIMI）" if env else "（默认路径）")]))
+        det = [f"{path}" + ("（来自 LITHUB_KIMI）" if env else "（默认路径）")]
+        # .cmd/.bat 是 Windows 上很容易踩的一个坑：subprocess 默认走 CreateProcess，
+        # 它**只给无扩展名的命令补 .exe**，不能执行批处理（报 WinError 193）。npm 装的
+        # CLI 常留一个同名 .cmd 垫片，看着像可执行文件，实际上是跑不起来的。
+        if plat == "Windows" and path.lower().endswith((".cmd", ".bat")):
+            result_sink.append(("warn", "LLM CLI 是 .cmd/.bat，Windows 上调用会失败", det + [
+                "Windows 的 CreateProcess 不能直接执行 .cmd/.bat（报 WinError 193"
+                "「%1 不是有效的 Win32 应用程序」），",
+                "而本仓的调用点（summarize_batch.py / embed_figures.py）是直接 exec 这个路径的。",
+                "改指向 .exe：`where.exe kimi` 会列出全部候选（.cmd 垫片旁边通常有 .exe）。",
+                "本项只提醒，不改调用逻辑。"]))
+            return
+        result_sink.append(("ok", "LLM CLI 存在", det))
         return
     det = [f"试过：{path}"]
     if plat == "Windows":
         det += ["Windows 上默认路径 `~/.kimi-code/bin/kimi` 是 Unix 布局，通常不存在——",
-                "把 LITHUB_KIMI 指到可执行文件（kimi.exe / kimi.cmd）：",
+                "把 LITHUB_KIMI 指到可执行文件（用 **.exe**；.cmd/.bat 不能直接 exec）：",
                 '        PowerShell: $env:LITHUB_KIMI = "C:\\Users\\<你>\\...\\kimi.exe"',
                 '        永久生效:   setx LITHUB_KIMI "C:\\Users\\<你>\\...\\kimi.exe"']
     else:
@@ -273,6 +302,9 @@ MARK = {"ok": "✅", "warn": "⚠️ ", "bad": "❌"}
 
 def main():
     ap = argparse.ArgumentParser(
+        # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，
+        # 不能当真开关执行
+        allow_abbrev=False,
         description="检查 LitHub 运行环境缺什么（只读检查，不问 LLM、不调 MinerU）。")
     ap.parse_args()
 

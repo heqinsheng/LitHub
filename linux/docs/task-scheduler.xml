@@ -40,6 +40,9 @@
      把 <Command> 改成 cmd.exe、<Arguments> 改成
        /c "python scripts\daily_digest.py >> logs\daily_digest.out 2>&1"
      （日志本身仍会写进 logs\daily_digest.log）。
+     这条重定向是安全的：脚本输出流已设 errors="replace"（2026-09-21 加，见 docs/windows.md
+     的 B7），当天标题里出现 Å / ö / Π 这类 cp936 编不出的字符时只会显示成 "?"，
+     不会像以前那样抛 UnicodeEncodeError 把这一轮打断。
 -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>

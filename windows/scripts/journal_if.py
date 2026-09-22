@@ -365,7 +365,8 @@ def build(refresh=False, log=print):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，不能当真开关执行
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--refresh", action="store_true", help="忽略缓存，全部重查")
     args = ap.parse_args()
 

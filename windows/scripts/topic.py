@@ -16,6 +16,19 @@
 import json
 import os
 import re
+import sys
+
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 文献数据里的 Å / ö / Π
+# （标题、作者、图注里很常见）会抛 UnicodeEncodeError，输出断在半路（实测
+# digest.py、sync_properties.py 都这么挂过）。只放宽错误策略、不改 encoding——
+# 编不出来时退化成 "?"，UTF-8 环境下的输出字节一个都不变。与 zapi.py 的 IPv4 补丁
+# 同一套路：import 本模块即生效，不必每个调用方各写一遍。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PATH = os.environ.get("LITHUB_TOPIC") or os.path.join(ROOT, "config", "topic.json")

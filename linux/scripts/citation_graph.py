@@ -146,7 +146,8 @@ def rebuild_co(by_citer):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，不能当真开关执行
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--rebuild", action="store_true", help="全量重建，丢弃旧图")
     args = ap.parse_args()
 

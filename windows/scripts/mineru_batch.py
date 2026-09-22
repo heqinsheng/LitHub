@@ -6,7 +6,8 @@
 
 `--flash` 是免令牌的兜底模式：只有 Markdown，图表变成 `<!-- image-->` 占位符，而且
 **单次上限 10 MB 且 20 页**——文件大小限制先于页数触发，`--pages` 绕不过 10 MB。走它时：
-  - >8MB 的文件先用 ghostscript 重压（/ebook 150dpi；不够再 /screen 72dpi）
+  - >8MB 的文件先用 ghostscript 重压（/ebook 150dpi；不够再 /screen 72dpi）；
+    **压不下来或机器上没装 ghostscript 时，只跳过这一篇**并写明原因，不会中断整轮
   - 页数 >20 再用 --pages 按 20 页分块
   - pdfseparate 在损坏 PDF 上不可用（每页会变成整份文档），故不使用
 
@@ -19,6 +20,17 @@
 import json, os, re, subprocess, sys, shutil, time, glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 路径与外部命令回显里的
+# Å / ö / Π 会抛 UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding
+# ——编不出来时退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本不 import
+# 任何本地模块，所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 MANIFEST = os.path.join(ROOT, "state", "manifest.json")
@@ -27,6 +39,15 @@ WORK = os.path.join(ROOT, "state", "work")
 MAX_BYTES = 8 * 1024 * 1024
 MAX_PAGES = 20
 BIN = "mineru-open-api"
+
+# Ghostscript 的可执行名：Linux / macOS 是 `gs`，而 Ghostscript 官方 Windows 包给的
+# 是 `gswin64c.exe`（控制台版），**没有 gs.exe**——Windows 的 CreateProcess 只给无
+# 扩展名的命令补 `.exe`，所以裸 `gs` 在那边是找不到的。按顺序探测（优先 Unix 的 gs）。
+# 只在 --flash 且 PDF > 8 MB 时用得到；默认的 extract 引擎不需要它。
+GS = next((p for p in (shutil.which("gs"), shutil.which("gswin64c")) if p), None)
+GS_HINT = ("装 Ghostscript（Windows 官方包在 ghostscript.com/releases/gsdnld.html，"
+           "装完确认 gswin64c 所在目录在 PATH 上），或改用默认的 extract 引擎"
+           "（需 token，限 200 MB / 600 页，不需要压缩）")
 
 # flash = 免令牌、仅 Markdown，图表变 <!-- image--> 占位符，限 10MB/20页
 # extract = 精准模式（需 token），产出 images/ 等全部资源，限 200MB/600页（默认）
@@ -44,28 +65,51 @@ def log(msg):
 
 
 def gs_compress(src, dst, preset):
-    cmd = ["gs", "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite",
+    """调 ghostscript 压一版；返回是否**产出了像样的文件**。
+
+    找不到命令（GS 为 None）、调用失败、超时都只返回 False —— 调用方据此跳过这一篇，
+    不让 FileNotFoundError 之类掀掉整轮（2026-09-21 修：此前只接 TimeoutExpired，
+    Windows 上没有 gs.exe 时会裸抛 FileNotFoundError，整批转换中断）。
+    """
+    if GS is None:
+        return False
+    cmd = [GS, "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite",
            f"-dPDFSETTINGS=/{preset}", "-dCompatibilityLevel=1.5",
            f"-sOutputFile={dst}", src]
     try:
         subprocess.run(cmd, capture_output=True, timeout=1800)
     except subprocess.TimeoutExpired:
+        log(f"    ! {GS} 超时（30 分钟），放弃这一版压缩")
+        return False
+    except OSError as e:            # FileNotFoundError / PermissionError 都在内
+        log(f"    ! 调不动 {GS}（{e.__class__.__name__}: {e}），放弃压缩")
         return False
     return os.path.exists(dst) and os.path.getsize(dst) > 1000
 
 
 def prepare(pdf, tmp):
-    """把过大的 PDF 压到 8MB 以内，返回可用路径。"""
+    """把过大的 PDF 压到 8MB 以内，返回可用路径；压不下来返回 None（跳过这一篇）。
+
+    返回 None 而不是原文件：原文件超 10MB，送去 flash 也只会被服务端拒掉，
+    报出来的错还不如这里直说「需要 ghostscript」。
+    """
     if os.path.getsize(pdf) <= MAX_BYTES:
         return pdf
+    mb = os.path.getsize(pdf) / 1e6
+    if GS is None:
+        log(f"    ✗ PDF {mb:.1f}MB 超过 flash 的 10MB 上限，但本机找不到 gs / gswin64c："
+            f"{GS_HINT}")
+        return None
     for preset in ("ebook", "screen"):
         out = os.path.join(tmp, f"comp_{preset}.pdf")
         if gs_compress(pdf, out, preset):
             sz = os.path.getsize(out)
-            log(f"    gs/{preset}: {os.path.getsize(pdf)/1e6:.1f}MB -> {sz/1e6:.1f}MB")
+            log(f"    {GS}/{preset}: {mb:.1f}MB -> {sz/1e6:.1f}MB")
             if sz <= MAX_BYTES:
                 return out
-    return pdf
+    log(f"    ✗ {mb:.1f}MB 的 PDF 没能压到 8MB 以内，跳过这一篇（失败原因见上；"
+        f"也可改走 extract 引擎，它限 200 MB 且不需要预压缩）")
+    return None
 
 
 def call_flash(pdf, outdir, pages=None, retries=3):
@@ -184,6 +228,9 @@ def convert(rec):
             return key, f"ok(1块,{extra}个附属文件)", time.time() - t0
 
         src = prepare(rec["path"], tmp)
+        if src is None:
+            # prepare() 已经写明原因（缺 ghostscript / 压不进 8MB），这里只标记这一篇失败
+            return key, "FAIL(超10MB，压不下或缺 gs；见上面日志)", time.time() - t0
         pages = rec["pages"] or 999
         ranges = ([None] if pages <= MAX_PAGES
                   else [f"{a}-{min(a+MAX_PAGES-1, pages)}"
@@ -230,7 +277,32 @@ def parse_args(argv):
     return key, workers
 
 
+USAGE = """用法: mineru_batch.py [<8位Zotero key>|all] [并发数] [--flash] [--force]
+  <key>|all   只转换该 key，或 all 表示全部（默认全部）
+  并发数      并发线程数（默认 3；extract 引擎下待转 >24 篇时上限 4）
+  --flash     免令牌兜底引擎（限 10 MB / 20 页、无图表）；默认用 extract 精准引擎
+  --force     已转换过的也重转
+  -h, --help  打印本用法，不做任何事"""
+
+
+def _guard_argv(argv, usage, known=()):
+    """参数护栏：`--help` 只打印用法、认不出的 `--` 开关报错退出 2，两者都不做事。
+
+    本脚本原先把 `--` 开头的 token 一律过滤掉，于是 `--help`（以及任何打错的开关）
+    会**静默开始干活**（`--flash 3` 曾把 3 当成 key 传下去）。
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    bad = sorted({a for a in argv if a.startswith("--") and a.split("=", 1)[0] not in set(known)})
+    if bad:
+        print(usage, file=sys.stderr)
+        print(f"认不出的开关：{' '.join(bad)}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
+    _guard_argv(sys.argv[1:], USAGE, known=("--flash", "--force", "--engine"))
     only, workers = parse_args(sys.argv[1:])
     man = json.load(open(MANIFEST, encoding="utf-8"))
     todo = [r for r in man if r["status"] == "pdf"]

@@ -39,6 +39,18 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import zapi
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 文献数据里的 Å / ö / Π
+# （标题、作者、图注里很常见）会抛 UnicodeEncodeError，输出断在半路（本脚本的
+# 「属性区」对照行就挂过）。只放宽错误策略、不改 encoding——编不出来时退化成
+# "?"，UTF-8 环境下的输出字节一个都不变。与 zapi.py 的 IPv4 补丁同一套路：
+# import 本模块即生效（summarize_batch.py 就是靠这一条拿到的）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 MANIFEST = os.path.join(ROOT, "state", "manifest.json")
@@ -272,7 +284,8 @@ def load_items():
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    # allow_abbrev=False：禁前缀缩写，打错的开关（如 --a / --f）必须报错退出 2，不能当真开关执行
+    ap = argparse.ArgumentParser(allow_abbrev=False)
     ap.add_argument("--apply", action="store_true", help="写回文件（默认只报告）")
     ap.add_argument("--key", default="", help="只处理这一篇（Zotero key）")
     ap.add_argument("--build-abbr", action="store_true", help="只补期刊简写表")

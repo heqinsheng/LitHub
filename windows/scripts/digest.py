@@ -2,6 +2,17 @@
 """从 papers/ 下各篇 summary.md 里抽取紧凑摘要，供分类使用（避免一次性读入全部全文）。"""
 import os, re, sys, json
 
+# ── 控制台编码兜底 ────────────────────────────────────────────────────
+# Windows 中文控制台的 Python 默认编码是 cp936：print 文献数据里的 Å / ö / Π
+# 会抛 UnicodeEncodeError，整篇输出断在半路（本脚本实测就是这么挂的）。只放宽
+# 错误策略、不改 encoding——编不出来时退化成 "?"，UTF-8 环境下的输出字节一个都
+# 不变。本脚本不 import 任何本地模块，所以自带一份（与 zapi.py 同款）。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 

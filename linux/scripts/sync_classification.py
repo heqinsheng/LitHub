@@ -44,121 +44,143 @@ ANCHOR = re.compile(r"^## 4\. 值得注意的发现", re.M)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import topic  # noqa: E402  分类法 / 标签词表都在 config/topic.json
 
-cls = json.load(open(CLS, encoding="utf-8"))
-n = len(cls)
-
-# 版面顺序 = 一级分类 + 其他/综述这类附加目录。数据里出现、但两个来源都没有的分类
-# 追加到末尾——**不静默丢掉**（静默丢会让总表看起来"少了几个分类"，很难察觉）。
-ORDER = list(topic.CATS) + [c for c in topic.EXTRA_TOP if c not in topic.CATS]
-
-UNCATEGORIZED = "（未分类）"
+USAGE = """用法: sync_classification.py
+  （无参数）把 state/classification.json 渲染成「分类与标签总表.md」。
+  只读分类数据：改分类要改 state/classification.json，再跑本脚本刷新总表。
+  -h, --help  打印本用法，不做任何事"""
 
 
-def prim(c):
-    """一级分类。`classification.json` 是给人手工编辑的，漏一个字段不该让整张总表
-    生成不出来——缺失时给个显眼的占位符，好过 KeyError 把脚本崩掉。"""
-    return c.get("primary") or UNCATEGORIZED
+def _guard_argv(argv, usage, known=()):
+    """参数护栏：`--help` 只打印用法、认不出的 `--` 开关报错退出 2，两者都不做事。
+
+    本脚本原先连顶层代码都会重写总表，`--help` 当然也照写不误；现在只有 main() 写盘。
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    bad = sorted({a for a in argv if a.startswith("--") and a.split("=", 1)[0] not in set(known)})
+    if bad:
+        print(usage, file=sys.stderr)
+        print(f"认不出的开关：{' '.join(bad)}", file=sys.stderr)
+        sys.exit(2)
 
 
-ORDER += [k for k in sorted({prim(c) for c in cls} - set(ORDER))]
+def main():
+    _guard_argv(sys.argv[1:], USAGE)
+    cls = json.load(open(CLS, encoding="utf-8"))
+    n = len(cls)
 
+    # 版面顺序 = 一级分类 + 其他/综述这类附加目录。数据里出现、但两个来源都没有的分类
+    # 追加到末尾——**不静默丢掉**（静默丢会让总表看起来"少了几个分类"，很难察觉）。
+    ORDER = list(topic.CATS) + [c for c in topic.EXTRA_TOP if c not in topic.CATS]
 
-def axis(counts, headers, note=""):
-    """渲染一个标签轴的表格小节。headers = (小节标题, 列名)。"""
-    title, col = headers
-    out = [f"### {title}\n"]
-    if note:
-        out.append(note + "\n")
-    out.append(f"| {col} | 篇数 |")
-    out.append("|---|---:|")
-    for k, v in counts.most_common():
-        out.append(f"| {k} | {v} |")
-    out.append("")
-    return out
+    UNCATEGORIZED = "（未分类）"
 
+    def prim(c):
+        """一级分类。`classification.json` 是给人手工编辑的，漏一个字段不该让整张总表
+        生成不出来——缺失时给个显眼的占位符，好过 KeyError 把脚本崩掉。"""
+        return c.get("primary") or UNCATEGORIZED
 
-def collect(field):
-    return collections.Counter(x for c in cls for x in (c.get(field) or []))
+    ORDER += [k for k in sorted({prim(c) for c in cls} - set(ORDER))]
 
+    def axis(counts, headers, note=""):
+        """渲染一个标签轴的表格小节。headers = (小节标题, 列名)。"""
+        title, col = headers
+        out = [f"### {title}\n"]
+        if note:
+            out.append(note + "\n")
+        out.append(f"| {col} | 篇数 |")
+        out.append("|---|---:|")
+        for k, v in counts.most_common():
+            out.append(f"| {k} | {v} |")
+        out.append("")
+        return out
 
-pc = collections.Counter(prim(c) for c in cls)
-subc, methc, matc = collect("sub"), collect("method"), collect("materials")
-formc, sysc, cplc = collect("form"), collect("system"), collect("coupling")
-reviews = [c for c in cls if c.get("is_review")]
+    def collect(field):
+        return collections.Counter(x for c in cls for x in (c.get(field) or []))
 
-# 旧总表末尾的人工「值得注意的发现」章节：按锚点原样保留
-old = open(SUM, encoding="utf-8").read() if os.path.exists(SUM) else ""
-m = ANCHOR.search(old)
-analysis = old[m.start():].rstrip() + "\n" if m else ""
+    pc = collections.Counter(prim(c) for c in cls)
+    subc, methc, matc = collect("sub"), collect("method"), collect("materials")
+    formc, sysc, cplc = collect("form"), collect("system"), collect("coupling")
+    reviews = [c for c in cls if c.get("is_review")]
 
-L = []
-L.append("# 文献分类与标签总表\n")
-L.append(f"> 由 `scripts/sync_classification.py` 从 `state/classification.json` 生成，"
-         f"共 **{n}** 篇。分类法与各标签轴的可选值见 `config/topic.json`。\n")
-L.append("> 表尾「值得注意的发现」是**人工撰写**的章节，本脚本只按锚点原样保留，不会重写。\n")
+    # 旧总表末尾的人工「值得注意的发现」章节：按锚点原样保留
+    old = open(SUM, encoding="utf-8").read() if os.path.exists(SUM) else ""
+    m = ANCHOR.search(old)
+    analysis = old[m.start():].rstrip() + "\n" if m else ""
 
-L.append("\n## 1. 分类统计总览\n")
-L.append(f"### 1.1 一级分类（共 {n} 篇）\n")
-L.append("| 一级分类 | 篇数 | 占比 |")
-L.append("|---|---:|---:|")
-for k in ORDER:
-    if pc.get(k):
-        L.append(f"| {k} | {pc[k]} | {pc[k] * 100 // max(n, 1)}% |")
-L.append("")
-L.extend(axis(subc, ("1.2 子类标签", "子类标签"),
-               f"共 {sum(subc.values())} 个次；一篇可跨多个子类、也可跨一级分类。\n"))
-L.extend(axis(methc, ("1.3 方法标签", "方法")))
-L.extend(axis(matc, ("1.4 材料体系标签", "材料体系")))
-L.extend(axis(formc, ("1.5 形态标签（正交轴）", "形态"),
-               "单晶 / 多晶二次颗粒描述的是**形貌**而非材料家族，所以单列一轴"
-               "（可选值见 `config/topic.json` 的 `labels.form`）。\n"))
-L.extend(axis(sysc, ("1.6 体系标签（正交轴）", "体系"),
-               "只标**非默认**的体系（可选值见 `config/topic.json` 的 `labels.system`）。\n"))
-L.extend(axis(cplc, ("1.7 耦合方向标签（正交轴）", "耦合方向"),
-               "一级分类是单值的，交叉主题另用两套标签表达：Zotero 里的 `耦合:<方向>`"
-               "（**只标注、不参与日报打分**，取值见 `config/topic.json` 的 `coupling`）与 "
-               "`兼属:<一级分类>`（同时挂进对应一级目录，实现多归属）。\n"))
-L.append(f"其中综述 **{len(reviews)}** 篇；带耦合方向标签 "
-         f"{sum(1 for c in cls if c.get('coupling'))} 篇。\n")
+    L = []
+    L.append("# 文献分类与标签总表\n")
+    L.append(f"> 由 `scripts/sync_classification.py` 从 `state/classification.json` 生成，"
+             f"共 **{n}** 篇。分类法与各标签轴的可选值见 `config/topic.json`。\n")
+    L.append("> 表尾「值得注意的发现」是**人工撰写**的章节，本脚本只按锚点原样保留，不会重写。\n")
 
-L.append(f"\n## 2. 主表（{n} 篇）\n")
-L.append("| # | 一级分类 | 二级分类 | 子类标签 | 耦合 | 综述 | 方法 | 材料体系 | 形态 | 体系 | 年份 | 标题 | key |")
-L.append("|---:|---|---|---|:--:|:--:|---|---|---|---|---:|---|---|")
-# year 统一转成字符串再排：classification.json 是手工编辑的，混进一个整数年份就会
-# TypeError: '<' not supported between 'int' and 'str'，整张表生成不出来
-for i, c in enumerate(sorted(cls, key=lambda x: (ORDER.index(prim(x))
-                                                 if prim(x) in ORDER else 99,
-                                                 str(x.get("year") or ""))), 1):
-    L.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
-        i, prim(c), c.get("secondary") or "—",
-        "、".join(c.get("sub") or []) or "—",
-        "、".join(c.get("coupling") or []) or "—",
-        "是" if c.get("is_review") else "",
-        "、".join(c.get("method") or []) or "—",
-        "、".join(c.get("materials") or []) or "—",
-        "、".join(c.get("form") or []) or "—",
-        "、".join(c.get("system") or []) or "—",
-        c.get("year") or "?", str(c.get("title", "")).replace("|", "/")[:70], c["key"]))
-L.append("")
+    L.append("\n## 1. 分类统计总览\n")
+    L.append(f"### 1.1 一级分类（共 {n} 篇）\n")
+    L.append("| 一级分类 | 篇数 | 占比 |")
+    L.append("|---|---:|---:|")
+    for k in ORDER:
+        if pc.get(k):
+            L.append(f"| {k} | {pc[k]} | {pc[k] * 100 // max(n, 1)}% |")
+    L.append("")
+    L.extend(axis(subc, ("1.2 子类标签", "子类标签"),
+                   f"共 {sum(subc.values())} 个次；一篇可跨多个子类、也可跨一级分类。\n"))
+    L.extend(axis(methc, ("1.3 方法标签", "方法")))
+    L.extend(axis(matc, ("1.4 材料体系标签", "材料体系")))
+    L.extend(axis(formc, ("1.5 形态标签（正交轴）", "形态"),
+                   "单晶 / 多晶二次颗粒描述的是**形貌**而非材料家族，所以单列一轴"
+                   "（可选值见 `config/topic.json` 的 `labels.form`）。\n"))
+    L.extend(axis(sysc, ("1.6 体系标签（正交轴）", "体系"),
+                   "只标**非默认**的体系（可选值见 `config/topic.json` 的 `labels.system`）。\n"))
+    L.extend(axis(cplc, ("1.7 耦合方向标签（正交轴）", "耦合方向"),
+                   "一级分类是单值的，交叉主题另用两套标签表达：Zotero 里的 `耦合:<方向>`"
+                   "（**只标注、不参与日报打分**，取值见 `config/topic.json` 的 `coupling`）与 "
+                   "`兼属:<一级分类>`（同时挂进对应一级目录，实现多归属）。\n"))
+    L.append(f"其中综述 **{len(reviews)}** 篇；带耦合方向标签 "
+             f"{sum(1 for c in cls if c.get('coupling'))} 篇。\n")
 
-L.append("\n## 3. 按一级分类分组\n")
-for k in ORDER:
-    grp = [c for c in cls if prim(c) == k]
-    if not grp:
-        continue
-    L.append(f"\n### {k}（{len(grp)} 篇）\n")
-    for c in sorted(grp, key=lambda x: str(x.get("year") or "")):
-        L.append(f"- **[{c['key']}]** {str(c.get('title', ''))[:88]} ({c.get('year') or '?'})")
+    L.append(f"\n## 2. 主表（{n} 篇）\n")
+    L.append("| # | 一级分类 | 二级分类 | 子类标签 | 耦合 | 综述 | 方法 | 材料体系 | 形态 | 体系 | 年份 | 标题 | key |")
+    L.append("|---:|---|---|---|:--:|:--:|---|---|---|---|---:|---|---|")
+    # year 统一转成字符串再排：classification.json 是手工编辑的，混进一个整数年份就会
+    # TypeError: '<' not supported between 'int' and 'str'，整张表生成不出来
+    for i, c in enumerate(sorted(cls, key=lambda x: (ORDER.index(prim(x))
+                                                     if prim(x) in ORDER else 99,
+                                                     str(x.get("year") or ""))), 1):
+        L.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            i, prim(c), c.get("secondary") or "—",
+            "、".join(c.get("sub") or []) or "—",
+            "、".join(c.get("coupling") or []) or "—",
+            "是" if c.get("is_review") else "",
+            "、".join(c.get("method") or []) or "—",
+            "、".join(c.get("materials") or []) or "—",
+            "、".join(c.get("form") or []) or "—",
+            "、".join(c.get("system") or []) or "—",
+            c.get("year") or "?", str(c.get("title", "")).replace("|", "/")[:70], c["key"]))
     L.append("")
 
-if analysis:
-    L.append("\n---\n")
-    L.append(analysis)
+    L.append("\n## 3. 按一级分类分组\n")
+    for k in ORDER:
+        grp = [c for c in cls if prim(c) == k]
+        if not grp:
+            continue
+        L.append(f"\n### {k}（{len(grp)} 篇）\n")
+        for c in sorted(grp, key=lambda x: str(x.get("year") or "")):
+            L.append(f"- **[{c['key']}]** {str(c.get('title', ''))[:88]} ({c.get('year') or '?'})")
+        L.append("")
 
-open(SUM, "w", encoding="utf-8").write("\n".join(L))
+    if analysis:
+        L.append("\n---\n")
+        L.append(analysis)
 
-print(f"总表已重写：{n} 篇，{os.path.getsize(SUM)} 字节")
-print("  一级分类:", dict(pc.most_common()))
-print("  综述:", len(reviews),
-      "| 带耦合标签:", sum(1 for c in cls if c.get("coupling")),
-      "| 保留人工分析章节:", bool(analysis))
+    open(SUM, "w", encoding="utf-8").write("\n".join(L))
+
+    print(f"总表已重写：{n} 篇，{os.path.getsize(SUM)} 字节")
+    print("  一级分类:", dict(pc.most_common()))
+    print("  综述:", len(reviews),
+          "| 带耦合标签:", sum(1 for c in cls if c.get("coupling")),
+          "| 保留人工分析章节:", bool(analysis))
+
+
+if __name__ == "__main__":
+    main()
