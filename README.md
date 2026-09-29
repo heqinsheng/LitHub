@@ -187,6 +187,71 @@ python scripts/doctor.py
 - **有**：全部代码、上手手册、一篇 **CC BY 4.0** 论文经流水线处理后的完整样例产出
 - **没有**：任何论文原文与 PDF、作者的个人文献库、运行状态与缓存、API 密钥
 
+## 更新记录
+
+按发布日期**倒序**。版本号就用日期——这个项目没有语义化版本：你拿到的发布包是**某一刻工作区的
+快照**，由 `scripts/make_release.py` 整体重建。
+
+### 2026-09-29
+
+相对上一次发布（2026-09-22）：**每个版本里改动 14 个项目文件、新增 8 个、删除 0**
+（另有仓库首页这份 `README.md` 本身）。下面按「新增一个能用的功能」分组，而不是按文件列。
+
+**新增：全文翻译（含批注）**
+
+给一篇论文做**逐段中文翻译**并在译文里插批判性批注，产物是
+`papers/<KEY>_*/全文翻译（含批注）.md`（与 `paper.md`、`summary.md` 并列，
+`link_markdown.py` 会自动把它挂成第三个 Zotero 链接附件）。
+
+```bash
+python3 scripts/paper_context.py ND2Z2J4Q                 # 零 LLM 取数：库内引文关系/被引量/作者 h 指数
+python3 scripts/translate_batch.py --dry-run ND2Z2J4Q     # 只看块序列、分段表与图片对账
+python3 scripts/translate_batch.py all 3                  # 挑还没译文的，最多 3 篇
+python3 scripts/link_markdown.py                          # 挂链接附件
+```
+
+新增 5 个文件：`scripts/translate_batch.py`（驱动：切段 / 写属性区 / 抄参考文献 / 拼装 / 体检）、
+`scripts/paper_context.py`（零 LLM 取数）、`prompts/translate_full.md`（总规范）、
+`prompts/translate_mode_{research,review}.md`（按 `is_review` 注入的类型专项要求）、
+`prompts/translator.agent.md`（工具只留 Read/Write/WebSearch）。
+
+架构要点（**改回去会贵一个数量级**）：一篇论文由多个进程各写一块——脚本切行区间、写属性区、
+把参考文献**整节逐字抄走**、最后按原文顺序拼装；模型只写「开头三节」（1 次调用）或某一段译文
+（N 次并行）。**参考文献、出版方网页壳、`paper.md` 自己的 YAML 头从不进模型上下文**。
+逐段可续跑（已有分片默认跳过），`--report-usage` 打印真实 token 用量。
+
+**新增：备用库**
+
+`config/topic.json` 新增 `backup_collections`（一级目录名以此**开头**即算，含整棵子树）。
+备用库里的文献照常走 MinerU 转换与一份**极简总结**，但**不参与**推荐分、文献画像、日报及其下游
+（`citation_graph` / `library_index`），也不参与 `tidy.py` 的重复合并与空目录删除。
+
+- 新增模板 `prompts/summarize_backup.md`：只注入**摘要与结论段**、不注入全文，所以成品短得多。
+  `summarize_batch.py` 的 `sections_for()` 现在认三套章节集（研究论文 / 综述 / 备用库）。
+- `intake_pdfs.py` 新增 `--from-collection 名称或KEY`：把**直接加进 Zotero** 的目录接进流水线
+  （不新建条目、不重传附件、不联网），并给条目打 `backup` 标记。
+- `zapi.py` 新增备用库助手（`collections_map()` / `keys_matching()` / `backup_keys()` /
+  `is_backup_item()`），`topic.py` 暴露 `BACKUP_COLLECTIONS`，排除点落在
+  `library_index.py`（**根**：下游全跟随）、`build_profile.py`、`tidy.py`。
+
+**新增：`docs/设计决策与实测记录.md`**
+
+`AGENTS.md` 从此只放「每一轮都要照着做」的操作与红线，篇幅砍掉约 1300 行；「为什么这么写」
+与全部实测数据搬进这份外置档案，**AI 代理的常驻上下文因此显著变短**。
+
+**改进**
+
+- `intake_pdfs.py`：收编来源改为两个——`待整理/` **全收**，`~/Downloads/` **只收今日新增**
+  （按 `ctime` 判断），所以下载完不必再手工搬文件。
+- `embed_figures.py`：图注解析拆成 `label_line()` / `caption_text()` / `collect_panels()` 三步，
+  并加了更宽松的回退分支 `parse_figures(relaxed=True)`——一图多版、图注被 OCR 折断时不再直接丢掉。
+- `link_markdown.py`：挂第三个链接附件「全文翻译（含批注）」；可选产物缺失时不再逐篇刷屏。
+- `帮助手册.md`：新增 §12「全文翻译（含批注）」，含 §12.7 用量账与 §12.8 实跑踩出来的八个坑。
+
+### 更早
+
+上一次发布是 **2026-09-22**。再往前只有 git 历史（`git log`）。
+
 ## 许可
 
 **代码与文档 MIT**（见 `LICENSE`）：`scripts/`、`prompts/`、`*.md` 都适用。

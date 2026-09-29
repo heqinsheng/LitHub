@@ -3,7 +3,8 @@
 锂离子电池正极材料文献的本地工作区，与 Zotero 库联动，由一组**幂等、可续跑**的脚本驱动。
 
 **公开仓库**：https://github.com/heqinsheng/LitHub —— 发布包由 `scripts/make_release.py` 生成到
-`release/`，再把 `release/` 推到该仓库的 `main` 分支；每个版本的变更记在 `更新说明.md`。
+`release/`，再把 `release/` 推到该仓库的 `main` 分支；每个版本的变更写在**仓库首页**
+`README.md` 的「更新记录」一节（素材是 `docs/release/root-README.md`，改那里才会进发布包）。
 
 **文档分工**：本文件是 **AI 代理的常驻约定**——每轮都要用的操作、纪律与红线。它每次开会话整份进
 上下文，所以**只放「照着做」与「别踩」的**：参考数据（字段表、参数表、实测数字）不放这里。
