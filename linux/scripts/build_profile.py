@@ -66,6 +66,19 @@ def phrases(text, nmin=2, nmax=4):
 def main():
     cls = json.loads((STATE / "classification.json").read_text(encoding="utf-8"))
     digest = {d["key"]: d for d in json.loads((STATE / "digest.json").read_text(encoding="utf-8"))}
+    # 备用库（topic.json 的 backup_collections）不属于研究主题，不进画像。判据是 manifest 里
+    # intake_pdfs.py --from-collection 打上的 backup 标记：离线可得，也不用像「按
+    # library_index 求交集」那样冒误伤非 journalArticle 正规论文的风险。
+    try:
+        _bk = {r["key"] for r in json.loads((STATE / "manifest.json").read_text(encoding="utf-8"))
+               if isinstance(r, dict) and r.get("backup")}
+    except Exception:
+        _bk = set()
+    if _bk:
+        _before = len(cls)
+        cls = [c for c in cls if c.get("key") not in _bk]
+        if len(cls) != _before:
+            print(f"  备用库条目已排除 {_before - len(cls)} 条（不参与画像）")
     n = len(cls)
 
     cat_cnt = Counter(c["primary"] for c in cls)
@@ -311,7 +324,7 @@ def main():
     # 「热点词」「新兴方向」两节 2026-09-20 已去掉：phrases() 不滤数字与单位，
     # 抽出来的是 `mah g` / `3 v` / `4 3` / `0 5` 这类碎片，登在画像里是噪声。
     # （hot / emerging 的计算暂时保留——hot 还接着检索式扩写那条路，
-    #   详见 AGENTS.md 里的说明。）
+    #   详见 docs/设计决策与实测记录.md §4.2。）
     # ── 5. 时间趋势 ──────────────────────────────────────────────────────
     L.append("\n## 5. 时间趋势\n")
     if not y_years:

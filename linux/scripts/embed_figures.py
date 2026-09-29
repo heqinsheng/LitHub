@@ -45,6 +45,12 @@ FORCE = "--force" in sys.argv
 MARK = "## 关键图表"
 # 提示词让模型挑 3–5 张；模型偶尔给更多（实测给过 8 张），脚本按上限裁掉
 MAX_FIGURES = 5
+# 图注编号行的几种写法见 label_line()；`(?![A-Za-z])` 挡住正文引用句 `Fig. 2a shows …`
+# / `Figure 1A)`（它们也以「Fig. 2」开头，但图号后紧跟拉丁字母，不是图注）
+TAG_PAT = re.compile(r"</?[A-Za-z][^>]{0,30}>")
+LABEL_PAT = re.compile(r"^\s*#{0,6}\s*(?:Figure|Fig\.?|图)\s*(\d+)(?![A-Za-z])\s*[.:|｜]?\s*(.*)$", re.I)
+# 从图注往上找图时最多走多少行：布局错乱的 PDF（图注在前、整段图在后）别把几十张图并进一张
+MAX_BACK = 60
 # 跑模型用的工作目录放 state/work/：论文目录是 Obsidian 库的一部分，中途 Ctrl-C 不该在
 # papers/<key>/ 里留下 figures.context.md / figures.plan.md 这种残骸。每个 key 单独一个子目录，
 # 并发跑时彼此不会看到对方的清单（输入文件名是固定的 figures.context.md，见 prompts/figures.agent.md）
@@ -84,12 +90,78 @@ def log(m):
     print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
 
 
-def parse_figures(d):
-    """从 paper.md 解析出 {图号: {'panels':[...], 'caption':英文原文}}。
+def label_line(line):
+    """认图注编号行 → (图号, 同行图注正文)；认不出返回 None。
+
+    MinerU 的图注编号有好几种写法，少认一种就有整篇配不上图（实测）：
+      `Fig. 1. 正文` / `Figure 1 | 正文`     编号与正文同行
+      `## FIGURE 5` + 空行 + 正文            编号被做成了小标题
+      `<sup>Fi</sup>gure 1`                  编号被 HTML 标签切碎
+      `图 1 中文图注`                        中文期刊与 `Fig. 1 …` 并列
+    先按原样认，认不出再抹掉 HTML 标签认一次（抹标签只为了认编号，正文仍取原行）。
+    """
+    for text in (line, TAG_PAT.sub("", line)):
+        m = LABEL_PAT.match(text)
+        if m:
+            return int(m.group(1)), m.group(2).strip()
+    return None
+
+
+def caption_text(lines, i, inline):
+    """图注正文：同行有就用整行原文，同行只有编号则取下面一行的正文。
+
+    同行有正文时返回**整行**（含 `Fig. 1.` 前缀，与改动前的行为一致——总结里要能看到原文的
+    图号与随行的 HTML 标签）。只有同行**完全没有**正文才往下找：宁可少找，也不能把正文段落
+    当图注（实测 `## FIGURE 5` 就是编号一行、正文在下一行）。
+    """
+    if inline:
+        return " ".join(lines[i].split())
+    j = i + 1
+    while j < len(lines) and (lines[j].strip() == "" or len(lines[j].strip()) <= 3):
+        j += 1
+    if j < len(lines):
+        s = lines[j].strip()
+        if (len(s) > 8 and not s.startswith(("#", "![](", "$", "|", ">"))
+                and not label_line(s)):
+            return " ".join(s.split())
+    return inline
+
+
+def collect_panels(lines, i, relaxed=False):
+    """往上收集该图注名下的图片（一图常被拆成多个连续图片文件）。
+
+    空行与面板字母（`a` `b` `(i)`）跳过。
+    `relaxed` 再放开两处——都只在中英双语与 MinerU 插错行的排版里出现，且都会让「正文
+    句子当图注」的判定变松，所以**只在严格模式一张带图的图注都收不到时**才启用
+    （见 process()）：
+      - 图注上方夹着**另一种语言的同一图注行**：中文期刊常把 `图 1 …` 与 `Fig. 1 …`
+        并列，图片挂在中文那行上面，严格模式会被它挡住；
+      - 图注上方夹着**一行正文**：MinerU 有把上一段尾巴插在图片与图注之间的毛病。
+    """
+    panels, skipped_prose, skipped_label, j = [], False, False, i - 1
+    while j >= 0 and i - j <= MAX_BACK:
+        s = lines[j].strip()
+        if s.startswith("![]("):
+            panels.insert(0, s[4:s.index(")")])
+        elif s == "" or len(s) <= 3:
+            pass
+        elif relaxed and not panels and not skipped_label and label_line(s):
+            skipped_label = True
+        elif relaxed and not panels and not skipped_prose and not s.startswith(("#", "$", "|", ">")):
+            skipped_prose = True
+        else:
+            break
+        j -= 1
+    return panels
+
+
+def parse_figures(d, relaxed=False):
+    """从 paper.md 解析出 {图号: {'panels':[...], 'caption':图注原文}}。
 
     注意：正文里「Fig. 8 shows …」这类句子也以 "Fig. 8" 开头，会被同一套正则命中。
     所以对每个图号收集**所有**候选行，取「前面挂了图片最多」的那一行当图注——
     真正的图注前面必有图片，正文句子前面通常是正文。
+    只有编号、同行与下一行都没有正文的行（`Figure 2` 这类孤立编号）不算图注，直接丢掉。
     """
     path = os.path.join(d, "paper.md")
     if not os.path.exists(path):
@@ -97,21 +169,15 @@ def parse_figures(d):
     lines = open(path, encoding="utf8", errors="replace").read().split("\n")
     cands = {}
     for i, ln in enumerate(lines):
-        m = re.match(r"\s*(?:Figure|Fig\.?)\s*(\d+)\s*[.:|｜]?\s+(\S.*)", ln, re.I)
-        if not m:
+        lab = label_line(ln)
+        if not lab:
             continue
-        n = int(m.group(1))
-        panels, j = [], i - 1
-        while j >= 0:
-            s = lines[j].strip()
-            if s.startswith("![]("):
-                panels.insert(0, s[4:s.index(")")])
-                j -= 1
-            elif s == "" or len(s) <= 3:
-                j -= 1
-            else:
-                break
-        cands.setdefault(n, []).append({"panels": panels, "caption": " ".join(ln.split())[:900]})
+        n, inline = lab
+        cap = caption_text(lines, i, inline)
+        if not cap:
+            continue
+        cands.setdefault(n, []).append({"panels": collect_panels(lines, i, relaxed),
+                                        "caption": " ".join(cap.split())[:900]})
 
     out = {}
     for n, lst in cands.items():
@@ -209,8 +275,15 @@ def process(rec):
         return key, "skip", 0, []
 
     figs = parse_figures(d)
+    if not any(v["panels"] for v in figs.values()):
+        figs = parse_figures(d, relaxed=True)     # 严格模式一张带图的图注都收不到才放宽
     if not figs:
         return key, "解析不到图注", 0, []
+    usable = [n for n in figs if figs[n]["panels"]]
+    if not usable:
+        # 图注认得出、但名下一张图都没有（布局错乱：图注在前、整段图在后）。再跑模型也只能白花
+        # 一轮 token —— 让它在清单里挑，只会得到「模型给了不存在的图号」。
+        return key, "图注配不上图", 0, []
     ctx = build_context(d, figs)
     run_dir = os.path.join(WORK, f"figures_{key}")
     plan_path = os.path.join(run_dir, "figures.plan.md")
@@ -222,7 +295,7 @@ def process(rec):
     t0 = time.time()
     if DRY:
         shutil.rmtree(run_dir, ignore_errors=True)
-        return key, f"dry({len(ctx)}字上下文,{len(figs)}图)", 0, []
+        return key, f"dry({len(ctx)}字上下文,{len(usable)}图可用)", 0, []
 
     items = []
     try:

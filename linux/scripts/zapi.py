@@ -194,3 +194,50 @@ def fmt_items(keys):
     for i in range(0, len(keys), 50):
         out += get_all("items", itemKey=",".join(keys[i:i + 50]))
     return out
+
+
+# ── 备用库（config/topic.json 的 backup_collections）────────────────────
+def collections_map():
+    """{目录 key: {"name", "parent"}}——目录树一次取全，供按名/按树下钻用。"""
+    out = {}
+    for c in get_all("collections"):
+        d = c.get("data") or {}
+        if d.get("key"):
+            out[d["key"]] = {"name": d.get("name") or "",
+                             "parent": d.get("parentCollection") or None}
+    return out
+
+
+def keys_matching(prefixes):
+    """**顶层**目录名以任一枚举值开头的目录，及其整棵子树，返回 key 集合。
+
+    用前缀而不是精确名：本库的实际命名是 `其它-审稿-2026-9-29-NMC_Review` 这类扁平名，
+    并不是 `其它` 底下的子目录。前缀匹配同时覆盖「真实父目录 + 子目录」与「扁平命名」
+    两种情况，以后新增 `其它-xxx` 也自动生效。
+    """
+    prefixes = [p for p in (prefixes or []) if p]
+    if not prefixes:
+        return set()
+    tree = collections_map()
+    hits = {k for k, v in tree.items()
+            if v["parent"] is None and any(v["name"].startswith(p) for p in prefixes)}
+    while True:                      # 目录树很浅，反复扫到不再增长即可，不值得建索引
+        more = {k for k, v in tree.items() if v["parent"] in hits and k not in hits}
+        if not more:
+            return hits
+        hits |= more
+
+
+def backup_keys():
+    """备用库的目录 key 集合（判据来自 config/topic.json 的 backup_collections）。"""
+    import topic as _topic           # 懒 import：避免 topic / zapi 在 import 期互相牵连
+    return keys_matching(_topic.BACKUP_COLLECTIONS)
+
+
+def is_backup_item(data, keys=None):
+    """条目 data 是否属于备用库。批量场景把 `keys` 传进来复用，别每条都拉一次目录树。"""
+    if keys is None:
+        keys = backup_keys()
+    if not keys:
+        return False
+    return bool(set(data.get("collections") or []) & keys)

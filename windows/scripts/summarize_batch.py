@@ -26,6 +26,9 @@ TEMPLATE = os.path.join(ROOT, "prompts", "summarize.md")
 # 综述模板：章节集与 {task} 措辞都不同，由 classification.json 的 is_review 自动选中。
 # 文件不存在时退回上面的研究论文模板（不另留一份内置综述常量：两份文本必然漂移）。
 TEMPLATE_REVIEW = os.path.join(ROOT, "prompts", "summarize_review.md")
+# 备用库（topic.json 的 backup_collections）的极简模板：正文只喂摘要+结论、只要求
+# 一句话结论+要点。由 manifest 记录的 backup 标记选中，不看 classification.json。
+TEMPLATE_BACKUP = os.path.join(ROOT, "prompts", "summarize_backup.md")
 KIMI = os.environ.get("LITHUB_KIMI") or os.path.expanduser("~/.kimi-code/bin/kimi")
 
 FIGURES = "--figures" in sys.argv
@@ -136,6 +139,11 @@ SECTIONS_REVIEW = ("一句话结论", "综述范围与选文标准", "分类框�
 # 只有综述模板才有的节名：用来从模板正文认出它要的是哪套章节集（见 sections_for）
 REVIEW_ONLY = ("综述范围与选文标准", "分类框架", "各方向的主要结论与证据",
                "共识与争议", "作者的判断与趋势")
+# 备用库的极简章节集。末节沿用 MANUAL_ANCHOR 是必须的：preserve_manual() 的归位与
+# embed_figures.py 的插入点都按那个字面量认人，换名字会让人工章节无处安放。
+SECTIONS_BACKUP = ("一句话结论", "要点", "关键词", MANUAL_ANCHOR)
+# 只有极简模板才有的节名，用来认出这套章节集（研究论文与综述两套都没有这两个名字）
+BACKUP_ONLY = ("要点", "关键词")
 # 老格式的章节名：仍要认得出来，好让重跑时把这一节丢掉/换掉，而不是当成人工章节又插回来
 LEGACY_SECTIONS = ("关键术语中英对照",
                    "与锂离子电池正极材料研究的关联")   # 2026-09-20 改名为「与研究主题的关联」
@@ -201,7 +209,7 @@ MAX_FIGURES = int_opt("max-figures", 5)
 MAX_STEPS = int_opt("max-steps", 5)
 # 受限 agent（只给 Read/Write）：默认会话会把内置工具 + MCP 的全部工具 schema 塞进每次调用，
 # 实测首调未缓存输入 35,441 token，换成 prompts/summarizer.agent.md 后降到 2,429 token。
-# 传 "--agent-file=" 关闭；用法见 AGENTS.md「写一篇总结要花多少 token」。
+# 传 "--agent-file=" 关闭；用法见 docs/设计决策与实测记录.md §5（token 实测）。
 # 判断「给没给这个开关」不能用 or：显式给空串就是「关闭」，or 会把它回落到默认 agent，开关静默失效。
 AGENT_FILE = OPTS["agent-file"] if "agent-file" in OPTS else os.path.join(
     ROOT, "prompts", "summarizer.agent.md")
@@ -260,23 +268,30 @@ def load_template(path):
 
 
 def sections_for(body):
-    """模板正文要哪套章节集——按模板里逐节写出的「## 节名」认，返回 SECTIONS 或 SECTIONS_REVIEW。
+    """模板正文要哪套章节集——按模板里逐节写出的「## 节名」认，返回 SECTIONS / SECTIONS_REVIEW /
+    SECTIONS_BACKUP。
 
     按内容认而不是按路径认：`--template` 可以指向任意文件（包括手抄的副本、改名过的副本），
     路径判断在那些情况下会给出与模板不符的章节集，合规校验随即误报、白跑一次调用。
-    两套的节名没有交集，只要认出任一「只有综述才有」的节名就够定案。
+    三套的节名没有交集，认出「只有某套才有」的节名就够定案。
     """
     heads = {norm_head(h) for h in HEAD_RE.findall(body)}
+    if any(norm_head(s) in heads for s in BACKUP_ONLY):
+        return SECTIONS_BACKUP
     return SECTIONS_REVIEW if any(norm_head(s) in heads for s in REVIEW_ONLY) else SECTIONS
 
 
-def template_choice(key, tpls):
+def template_choice(key, tpls, backup=False):
     """挑本篇要用的模板，返回 (模板, 模板路径, 章节集, 是否综述, 说明)。
 
-    `tpls` = {"research": (模板, 路径), "review": (模板, 路径), "forced": bool}，由 main() 备好。
+    `tpls` = {"research"/"review"/"backup": (模板, 路径), "forced": bool}，由 main() 备好。
     判据是 `state/classification.json` 的 `is_review`（用户逐篇标过，权威）：
     综述 → `prompts/summarize_review.md`，其余 → `prompts/summarize.md`。
-    `--template` 显式指定时（forced）两者是同一份，永远压过 is_review。
+
+    `backup=True`（manifest 记录带 backup 标记，即 topic.json 的 backup_collections 里的备用库）
+    直接走极简模板、**不看 classification.json**——备用库条目本就不该出现在 classification.json 里。
+    `--template` 显式指定时（forced）仍压过一切，包括 backup：那是「我知道自己在干什么」的信号，
+    此时正文注入也一并回到全文（见 build_prompt 的 backup 形参）。
 
     key 不在 classification.json 里时**按研究论文处理并记一行日志**，不猜：猜错会让整篇
     结构错位，重跑一次就是一次调用（实测约 0.09 元）；而新条目通常是先收编、后补分类，
@@ -284,6 +299,8 @@ def template_choice(key, tpls):
     """
     if tpls["forced"]:
         tpl, path, why = tpls["research"][0], tpls["research"][1], "--template 显式指定"
+    elif backup:
+        tpl, path, why = tpls["backup"][0], tpls["backup"][1], "备用库（极简）"
     else:
         flags = review_flags()
         if key not in flags:
@@ -507,6 +524,80 @@ def prune_paper(text):
     return text, "、".join(notes) if notes else "无"
 
 
+# 认「摘要/结论」这类节标题：整行只由关键字构成才算，这样正文里的
+# "as discussed in the abstract" 不会被误判。允许 Markdown # 前缀与 "6." 这类编号——
+# MinerU 出的是 `## 6. Conclusion`，不认编号就会漏掉结论段。
+BACKUP_SEC_RE = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\d+(?:\.\d+)*[.\s]+)?"
+    r"(abstract|conclusions?|summary|outlook|perspectives?|closing remarks)[ \t]*$",
+    re.I | re.M)
+# 正文第一节。摘要的结束位置靠它定位：**MinerU 的 paper.md 里摘要没有标题**，
+# 就夹在作者行与 `## 1. Introduction` 之间（实测四篇备用库文献都是这个形态）。
+INTRO_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\d+[.\s]+)?introduction\b",
+                      re.I | re.M)
+ANY_HEAD_RE = re.compile(r"^[ \t]*#{1,6}[ \t]*\S", re.M)
+
+
+def _next_head(text, pos):
+    m = ANY_HEAD_RE.search(text, pos)
+    return m.start() if m else len(text)
+
+
+def _clean_block(s):
+    """块内去掉标题行与图片行——摘要/结论的正文里不该混进这些。"""
+    return "\n".join(ln for ln in s.splitlines()
+                     if not ANY_HEAD_RE.match(ln) and not IMG_LINE_RE.match(ln)).strip()
+
+
+def backup_excerpt(text, limit=6000):
+    """备用库专用：把全文压成「摘要 + 结论」，返回 (文本, 说明)。
+
+    这是本脚本唯一一条**不注入全文**的路径，输入约为全文的 1/8。两段都认不出就退回取
+    前 limit 字——宁可少给上下文，也不为了凑段落去猜哪段是摘要。
+
+    **这里刻意不走 prune_paper()**：它的参考文献定位会误判（实测 TM7UNDEF 在 36.8% 处
+    就被当成参考文献起点，结论段连同一半正文一起被切掉），而按节抽取本来就不需要切参考
+    文献。只去 front-matter 与图片路径行。
+    """
+    text = FM_HEAD_RE.sub("", text, count=1)
+    text = IMG_LINE_RE.sub("", text)
+    matched = list(BACKUP_SEC_RE.finditer(text))
+    abs_hits = [m for m in matched if m.group(1).lower().startswith("abstract")]
+    parts, used = [], []
+
+    if abs_hits:
+        m = abs_hits[0]
+        seg = _clean_block(text[m.end():_next_head(text, m.end())])
+        if len(seg) > 120:
+            parts.append("## Abstract\n" + seg)
+            used.append("Abstract")
+    else:
+        # 没有 Abstract 标题：取「正文第一节之前」那一块
+        intro = INTRO_RE.search(text)
+        if intro:
+            seg = _clean_block(text[:intro.start()])
+            if len(seg) > 120:
+                parts.append("## Abstract\n" + seg)
+                used.append("Abstract（首节之前）")
+
+    for m in matched:
+        if m.group(1).lower().startswith("abstract"):
+            continue
+        seg = _clean_block(text[m.end():_next_head(text, m.end())])
+        if len(seg) > 80:
+            parts.append(f"## {m.group(1)}\n{seg}")
+            used.append(m.group(1))
+
+    if not parts:
+        return text[:limit], f"未认出摘要/结论节，退回首 {limit} 字"
+    out = "\n\n".join(parts)[:limit]
+    return out, f"仅摘要+结论（{'、'.join(used)}）共 {len(out)} 字"
+
+
+TASK_ONESHOT_BACKUP = ("下面给出的是一篇文献的摘要与结论段（Markdown，为省 token 只给了这两段，"
+                       "没有全文）。请直接写出这份中文的极简总结。")
+
+
 TASK_TOOL = ("阅读当前目录下的 paper.md（一篇学术论文的全文，Markdown 格式），"
              "写一份中文总结并存为 summary.md。")
 TASK_ONESHOT = ("下面给出的是一篇学术论文的全文（Markdown；为省 token 已去掉参考文献段与图片路径，"
@@ -545,11 +636,14 @@ ARGV_LIMIT = 30_000 if os.name == "nt" else 110_000
 TMP_NAME = "paper.summarize.md"
 
 
-def build_prompt(key, d, item, ab, tpl, mode=None, review=False):
+def build_prompt(key, d, item, ab, tpl, mode=None, review=False, backup=False):
     """拼一篇的提示词，返回 (提示词, 裁剪说明, 载体, 临时文件路径)。
 
     `review` 只影响注入的 {task} 措辞（「一篇学术论文的全文」↔「一篇综述的全文」）与全文
     注入行的说明；正文结构由模板自己给，这里不重复判断章节。
+
+    `backup=True`（备用库）**不注入全文**，只注入摘要+结论（见 backup_excerpt），载体固定
+    inline——那点字肯定塞得下 argv，没有降级到 file/tool 的必要。
 
     载体（mode）：
       inline  裁剪后的全文直接注入提示词，一次调用拿到正文——能把 argv 塞下的走这条；
@@ -560,6 +654,8 @@ def build_prompt(key, d, item, ab, tpl, mode=None, review=False):
     body, figs = tpl
     if mode is None:
         mode = "inline" if ONESHOT else "tool"
+    if backup:
+        mode = "inline"
     # --figures 注入的是**图注文本清单**，不是图像：本环境没有视觉能力，跑 kimi -p 的模型
     # 读不到 images/ 里的图，这份清单的作用只在于把「图号 ↔ 图注 ↔ 有没有图片文件」摆给它，
     # 好让它引对图号。原先只在 tool 载体注入，默认（oneshot）路径下这个开关等于空操作。
@@ -569,7 +665,7 @@ def build_prompt(key, d, item, ab, tpl, mode=None, review=False):
     if mode in ("inline", "file"):
         try:
             raw = open(os.path.join(d, "paper.md"), encoding="utf-8", errors="replace").read()
-            trimmed, note = prune_paper(raw)
+            trimmed, note = backup_excerpt(raw) if backup else prune_paper(raw)
         except OSError as e:
             log(f"  ! 读 paper.md 失败（{e}），本次退回工具模式")
             mode, note = "tool", "读取失败"
@@ -578,14 +674,20 @@ def build_prompt(key, d, item, ab, tpl, mode=None, review=False):
             if mode == "inline" and len(trimmed.encode()) + len(figs_note.encode()) > ARGV_LIMIT:
                 mode = "file"
             if mode == "inline":
-                src = f"\n以下是{'综述' if review else '论文'}全文：\n\n{trimmed}\n"
+                if backup:
+                    src = f"\n以下是该文献的摘要与结论段：\n\n{trimmed}\n"
+                else:
+                    src = f"\n以下是{'综述' if review else '论文'}全文：\n\n{trimmed}\n"
             else:
                 tmp = os.path.join(d, TMP_NAME)
                 open(tmp, "w", encoding="utf-8").write(trimmed)
-    tasks = ({"inline": TASK_ONESHOT_REVIEW, "file": TASK_FILE_REVIEW, "tool": TASK_TOOL_REVIEW}
-             if review else
-             {"inline": TASK_ONESHOT, "file": TASK_FILE, "tool": TASK_TOOL})
-    task = tasks[mode]
+    if backup:
+        task = TASK_ONESHOT_BACKUP
+    else:
+        tasks = ({"inline": TASK_ONESHOT_REVIEW, "file": TASK_FILE_REVIEW, "tool": TASK_TOOL_REVIEW}
+                 if review else
+                 {"inline": TASK_ONESHOT, "file": TASK_FILE, "tool": TASK_TOOL})
+        task = tasks[mode]
     prompt = (body.replace("{task}", task)
                   .replace("{draft_rule}", DRAFT_ONESHOT if mode != "tool" else DRAFT_TOOL)
                   .replace("{source}", src)
@@ -668,18 +770,20 @@ def norm_head(s):
 
 
 def section_key(head):
-    """把 ## 标题归到标准章节（研究论文或综述那套，外加老格式的 LEGACY_SECTIONS）之一，
-    归不上返回空串（= 人工内容）。
+    """把 ## 标题归到标准章节（研究论文 / 综述 / 备用库极简三套，外加老格式的
+    LEGACY_SECTIONS）之一，归不上返回空串（= 人工内容）。
 
-    两套都要认：`preserve_manual()` 用「认不出来 = 人工内容」判定要搬回哪些章节，若只认
-    研究论文那套，重跑综述时它的六节会被整段当成人工内容搬到第 7 节之前，结构全乱。
+    三套都要认：`preserve_manual()` 用「认不出来 = 人工内容」判定要搬回哪些章节，若只认
+    研究论文那套，重跑综述时它的六节会被整段当成人工内容搬到末节之前，结构全乱。
+    同理漏掉 SECTIONS_BACKUP，「要点」「关键词」会被 `missing_sections()` 判成缺失、白跑
+    一次重试（实测 4 篇备用库文献里 3 篇因此拿不到正文）。
     按前缀匹配是必要的：模型会把标题写成「## 与研究主题的关联（对领域的意义）」，甚至偶尔
     截短成「## 与研究主题」，这两种都得仍认得出来。
     老格式的「关键术语中英对照」也算「认得出来」——这样重跑时它会被丢掉，
     而不是当成人工章节又插回新文件里。
     """
     h = norm_head(head)
-    for s in SECTIONS + SECTIONS_REVIEW + LEGACY_SECTIONS:
+    for s in SECTIONS + SECTIONS_REVIEW + SECTIONS_BACKUP + LEGACY_SECTIONS:
         n = norm_head(s)
         if h.startswith(n) or (len(h) >= 3 and n.startswith(h)):
             return s
@@ -704,9 +808,9 @@ def split_sections(body):
 def preserve_manual(old_text, new_text):
     """把旧 summary.md 里的人工章节搬回模型新正文；属性区不动，返回合并后的全文。
 
-    人工约定的跨篇对照节（`## 库内同主题工作：…对照`）按 AGENTS.md 写在「关键术语中英
-    对照」之前，而 `--force` 重跑会让模型整篇覆盖 summary.md——所以按**章节**认：八节
-    之外的 ## 章节就是人工内容，原样插回锚点之前（也包括 embed_figures.py 写的「关键图表」）。
+    人工约定的跨篇对照节（`## 库内同主题工作：…对照`）写在「与研究主题的关联」之前，而
+    `--force` 重跑会让模型整篇覆盖 summary.md——所以按**章节**认：七节之外的 ## 章节
+    就是人工内容，原样插回锚点之前（也包括 embed_figures.py 写的「关键图表」）。
     不能用文件里的 HTML 注释当标记：这些 .md 要在 Obsidian 里读、还要挂进 Zotero。
     没有人工章节时原样返回 new_text——大多数篇目的行为与从前完全一致。
     """
@@ -746,15 +850,19 @@ def summarize(rec, items, ab, tpls):
     item = items.get(key)
     if not item:
         return key, "no-zotero-item", 0
-    tpl, tpl_path, sections, review, why = template_choice(key, tpls)
-    if DRY or review or why.startswith("研究论文（未分类"):
+    # 备用库判定：manifest 记录带 backup 标记（intake_pdfs.py --from-collection 打的）。
+    # --template 显式指定时让位——见 template_choice 的说明。
+    backup = bool(rec.get("backup")) and not tpls["forced"]
+    tpl, tpl_path, sections, review, why = template_choice(key, tpls, backup=backup)
+    kind = "综述" if review else ("备用库极简" if backup else "研究论文")
+    if DRY or review or backup or why.startswith("研究论文（未分类"):
         # 走哪套章节集、用的哪个模板文件，别让「用错了模板」只能靠读提示词猜出来
-        log(f"  {key} 模板：{why}｜{tpl_path}｜章节集 "
-            f"{'综述' if review else '研究论文'}{len(sections)} 节")
-    prompt, prune_note, mode, tmp = build_prompt(key, d, item, ab, tpl, review=review)
+        log(f"  {key} 模板：{why}｜{tpl_path}｜章节集 {kind}{len(sections)} 节")
+    prompt, prune_note, mode, tmp = build_prompt(key, d, item, ab, tpl,
+                                                 review=review, backup=backup)
     if DRY:
         print(f"\n===== {key} | {rec['title'][:60]} | 载体 {mode}"
-              f" | 章节集 {'综述' if review else '研究论文'}{len(sections)} 节"
+              f" | 章节集 {kind}{len(sections)} 节"
               f" | 模板 {tpl_path} | prompt {len(prompt)} 字"
               f" | 裁剪：{prune_note} =====\n{prompt}\n===== prompt 结束 =====\n", flush=True)
         if tmp and os.path.exists(tmp):
@@ -767,6 +875,10 @@ def summarize(rec, items, ab, tpls):
     if MAX_STEPS:
         env["KIMI_LOOP_MAX_STEPS_PER_TURN"] = str(MAX_STEPS)
     t0 = time.time()
+    # 验收下限按模式分：七节模式正文 1000–1500 字，400 是「模型真的写了东西」的底线；
+    # 极简模式模板要求的正文就是 250–400 字，沿用 400 会让一半的稿子被判成「正文过短」
+    # 而白跑两次重试（实测 4 篇里挂 2–3 篇，正是这个阈值造成的）。
+    MIN_BODY = 200 if backup else 400
 
     # ── inline / file：模型只回正文（不写文件），脚本落盘 ─────────────
     if mode in ("inline", "file"):
@@ -783,7 +895,8 @@ def summarize(rec, items, ab, tpls):
                 except subprocess.TimeoutExpired:
                     return key, "TIMEOUT", time.time() - t0
                 body = clean_body(parse_stream_json(r.stdout))
-                miss = missing_sections(body, sections) if len(body) > 400 else ["正文过短"]
+                miss = (missing_sections(body, sections)
+                        if len(body) > MIN_BODY else ["正文过短"])
                 if not miss:
                     break
                 if attempt == 1:
@@ -791,10 +904,14 @@ def summarize(rec, items, ab, tpls):
         finally:
             if tmp and os.path.exists(tmp):
                 os.remove(tmp)            # 临时全文用完即删，不留残骸
-        if len(body) > 400:
+        if len(body) > MIN_BODY:
             write_summary(summ, old, body, item, ab)
             tag = f"{mode},裁剪{prune_note}" + (f",缺{'/'.join(miss)}" if miss else "")
             return key, f"ok({tag})", time.time() - t0
+        if backup:
+            # 备用库不能退到工具模式：工具模式注入的是「去读 paper.md 全文」，与极简模板
+            # 的意图相反（会退回全文注入，白省一场）。直接报失败，让人看见。
+            return key, "备用库 inline 未拿到正文，未退工具模式", time.time() - t0
         log(f"  ! {key} {mode} 没拿到正文（{len(body)} 字），退回工具模式重试")
         prompt, prune_note, mode, tmp = build_prompt(key, d, item, ab, tpl, mode="tool",
                                                      review=review)
@@ -887,27 +1004,35 @@ def preflight(todo):
 
 
 def build_templates():
-    """备好两套模板，返回 template_choice() 要的 tpls。
+    """备好三套模板，返回 template_choice() 要的 tpls。
 
-    `--template` 显式指定时它同时充当两套（显式指定压过 is_review，与从前行为一致）；
-    否则研究论文用 prompts/summarize.md、综述用 prompts/summarize_review.md。
-    综述模板文件不在时退回研究论文模板并告警一次——**不另留一份内置综述常量**：
-    内置文本与 prompts/ 里的两份必然漂移，而判定「哪份是哪套」还得看模板正文（sections_for）。
+    `--template` 显式指定时它同时充当三套（显式指定压过 is_review 与 backup，与从前行为一致）；
+    否则研究论文用 prompts/summarize.md、综述用 prompts/summarize_review.md、
+    备用库用 prompts/summarize_backup.md。
+    后两个文件不在时各自退回研究论文模板并告警一次——**不另留内置常量**：
+    内置文本与 prompts/ 里的几份必然漂移，而判定「哪份是哪套」还得看模板正文（sections_for）。
     """
     forced_path = OPTS.get("template")
     if forced_path:
         tpl = load_template(forced_path)
-        log(f"模板由 --template 指定：{forced_path}（研究论文与综述都用它，is_review 不再参与）")
-        return {"research": (tpl, forced_path), "review": (tpl, forced_path), "forced": True}
+        log(f"模板由 --template 指定：{forced_path}"
+            f"（三套都用它，is_review 与 backup 标记都不再参与）")
+        return {"research": (tpl, forced_path), "review": (tpl, forced_path),
+                "backup": (tpl, forced_path), "forced": True}
     tpl_r = load_template(TEMPLATE)
     if os.path.exists(TEMPLATE_REVIEW):
-        tpls = {"research": (tpl_r, TEMPLATE), "review": (load_template(TEMPLATE_REVIEW),
-                                                         TEMPLATE_REVIEW), "forced": False}
+        tpl_rev = (load_template(TEMPLATE_REVIEW), TEMPLATE_REVIEW)
     else:
         log(f"⚠ 综述模板 {TEMPLATE_REVIEW} 不存在，本次综述也走研究论文模板 {TEMPLATE}"
             f"（章节集与 {{task}} 措辞一并按研究论文）")
-        tpls = {"research": (tpl_r, TEMPLATE), "review": (tpl_r, TEMPLATE), "forced": False}
-    return tpls
+        tpl_rev = (tpl_r, TEMPLATE)
+    if os.path.exists(TEMPLATE_BACKUP):
+        tpl_bk = (load_template(TEMPLATE_BACKUP), TEMPLATE_BACKUP)
+    else:
+        log(f"⚠ 备用库模板 {TEMPLATE_BACKUP} 不存在，备用库也走研究论文模板 {TEMPLATE}")
+        tpl_bk = (tpl_r, TEMPLATE)
+    return {"research": (tpl_r, TEMPLATE), "review": tpl_rev, "backup": tpl_bk,
+            "forced": False}
 
 
 USAGE = """用法: summarize_batch.py [并发数] [KEY,KEY...]

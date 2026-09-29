@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""把每篇文献的 paper.md（全文）与 summary.md（中文总结）作为「链接附件」挂到 Zotero 条目上。
+"""把每篇文献的 paper.md（全文）、summary.md（中文总结）与「全文翻译（含批注）.md」
+作为「链接附件」挂到 Zotero 条目上（后一个是可选产物，没有对应文件就跳过）。
 
 用 linked_file 模式 —— 文件仍留在 ~/LitHub，Zotero 只存链接，不占云配额、不复制文件。
 Zotero 里双击附件会用系统默认程序打开（.md 现在默认是 Obsidian）。
@@ -16,7 +17,10 @@ DRY = "--dry-run" in sys.argv
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 
-WANT = [("paper.md", "全文 Markdown"), ("summary.md", "中文总结")]
+WANT = [("paper.md", "全文 Markdown", True), ("summary.md", "中文总结", True),
+        # 全文翻译是可选产物（translate_batch.py 只对部分文献跑过），缺了不该刷屏、
+        # 也不该计进「缺文件」——那 200 多行告警会把真正的缺文件淹没。
+        ("全文翻译（含批注）.md", "全文翻译（含批注）", False)]
 
 
 def paper_file(key, fname):
@@ -57,10 +61,12 @@ def main():
             if name:
                 existing.add((d.get("linkMode") or "", name))
 
-        for fname, title in WANT:
+        for fname, title, required in WANT:
             full = paper_file(k, fname)
             if not full:
-                print(f"  ! 缺文件: {PAPERS}/{k}_*/{fname}"); missing += 1; continue
+                if required:
+                    print(f"  ! 缺文件: {PAPERS}/{k}_*/{fname}"); missing += 1
+                continue
             if ("linked_file", fname) in existing:
                 skipped += 1
                 continue

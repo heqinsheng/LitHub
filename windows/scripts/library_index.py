@@ -36,9 +36,17 @@ YEAR = re.compile(r"(1[89]\d{2}|20\d{2})")
 
 def fetch():
     raw = zapi.get_all("items/top", itemType="journalArticle")
+    # 备用库（topic.json 的 backup_collections）整棵子树不进索引。
+    # 这里是「根」：citation_graph、日报的 refs 通道、litsearch.py 的库内检索都读本文件，
+    # 在这一层排掉，下游全部自然跟随。
+    bkeys = zapi.backup_keys()
+    n_backup = 0
     items = []
     for it in raw:
         d = it.get("data") or {}
+        if zapi.is_backup_item(d, bkeys):
+            n_backup += 1
+            continue
         title = fc.clean(d.get("title") or "")
         doi = (d.get("DOI") or "").strip().lower() or None
         m = YEAR.search(d.get("date") or "")
@@ -51,6 +59,8 @@ def fetch():
             "journal": fc.clean(d.get("publicationTitle") or ""),
         })
     items.sort(key=lambda x: x["key"])
+    if n_backup:
+        print(f"  备用库条目已排除 {n_backup} 条（不参与推荐分/画像/日报）")
     return items
 
 

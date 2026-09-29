@@ -67,6 +67,9 @@ FALLBACK_CATEGORY = _cfg.get("fallback_category") or CATEGORY_ORDER[0]
 THEORY_CATEGORY = _cfg.get("theory_category") or ""
 # 归档目录（一级目录名）：其下整棵子树是历史项目，tidy 不碰、日常也不扫描
 ARCHIVE_COLLECTIONS = list(_cfg.get("archive_collections") or [])
+# 备用库（一级目录名前缀）：照常 MinerU + 极简总结，但不参与推荐分 / 画像 / 日报。
+# 用前缀而不是精确名——本库的实际命名是 `其它-审稿-2026-9-29-NMC_Review` 这种扁平名。
+BACKUP_COLLECTIONS = list(_cfg.get("backup_collections") or [])
 
 CATEGORIES = _require("categories", "每个一级分类的 sub / queries / keywords / pref")
 # {子类标签: 一级分类}——写目录时要用

@@ -142,16 +142,22 @@ def scan(live, children):
         if nxt <= archived:
             break
         archived |= nxt
+    # 备用库（config/topic.json 的 backup_collections）：一级目录名前缀匹配，含整棵子树。
+    # 与归档一样整块跳过——备用库条目被并进主库条目、或它的目录被当空目录删掉，都是丢数据。
+    # 这里单独算而不是并进 ARCHIVE_NAMES：两件事的语义不同（归档是过时项目、备用库是
+    # 照常转换但不参与打分的侧库），日志里要分得开。
+    backup = zapi.keys_matching(topic.BACKUP_COLLECTIONS)
+    skip_all = archived | backup
     # 只删「叶子空目录」：删父目录会**连带删除子目录**（含装着文献的），
     # 所以只要还有子目录就一律不动，留给人工判断。taxonomy / extra_categories 例外
     # （见 MANAGED_NAMES：那些名字 apply_to_zotero.py 每轮都要建出来）。
     empty_col = [(c["key"], c["data"]["name"]) for c in all_col
                  if cnt[c["key"]] == 0 and kids[c["key"]] == 0
-                 and c["key"] not in archived
+                 and c["key"] not in skip_all
                  and c["data"]["name"] not in MANAGED_NAMES]
     return (empty, attach_only, groups,
             [(k, p) for k in orphan for p in sorted(dirs[k])],
-            empty_col, dirs, archived)
+            empty_col, dirs, skip_all, archived, backup)
 
 
 def child_sig(c):
@@ -255,7 +261,8 @@ def _guard_argv(argv, usage, known=()):
 def main():
     _guard_argv(sys.argv[1:], USAGE, known=("--apply", "--keep-dups", "--merge-dups"))
     live, children = fetch()
-    empty, attach_only, groups, orphans, empty_col, dirs, archived = scan(live, children)
+    (empty, attach_only, groups, orphans, empty_col, dirs,
+     skip_all, archived, backup) = scan(live, children)
 
     log(f"库内顶层条目 {len(live)} 篇 | 模式: {'APPLY（备份后清理）' if APPLY else '只报告'}")
     log("")
@@ -264,6 +271,12 @@ def main():
     known = set(dirs)
     plan_dups, plan_merges, dup_lines = [], [], []
     for g in ([] if KEEP_DUPS else groups):
+        # 备用库（其它*）条目不进重复合并：并进主库条目或反向并入都会串库，
+        # 而 pick_survivor() 只看子项/字段，不会替我们守住这条边界
+        if backup and any(live[k]["data"].get("collections") and
+                          set(live[k]["data"]["collections"]) & backup for k in g):
+            dup_lines.append(f"   {'/'.join(g)}  ← 属备用库，跳过重复合并")
+            continue
         surv = pick_survivor(g, live, children, known)
         surv_sigs = {child_sig(c) for c in children[surv]}
         for k in g:
@@ -311,6 +324,9 @@ def main():
     if archived:
         log(f"[归档子树] {len(archived)} 个目录跳过："
             f"{'、'.join(sorted(ARCHIVE_NAMES))}")
+    if backup:
+        log(f"[备用库] {len(backup)} 个目录跳过（不参与重复合并与空目录删除）："
+            f"{'、'.join(sorted(topic.BACKUP_COLLECTIONS))}*")
 
     if not APPLY:
         log("\n未做任何改动。加 --apply 执行。")

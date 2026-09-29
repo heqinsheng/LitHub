@@ -18,6 +18,10 @@
  "archive_collections": [
   "归档"
  ],
+ "_backup_collections_help": "备用库：一级目录名以此开头（含整棵子树）即为备用库，本库里的实际结构是 其它 / 审稿 / 2026-9-29-NMC_Review 三级。备用库里的文献照常走 MinerU 转换与极简总结，但不参与推荐分、文献画像、日报及其下游（citation_graph / library_index）、也不参与 tidy 的重复合并与空目录删除。用前缀匹配而不是精确名：这样既认「其它」这个父目录的整棵子树，也认「其它-xxx」这类把层级写成扁平名的目录，以后在「其它」下加「教学」「项目」等兄弟目录都不用再改代码。",
+ "backup_collections": [
+  "其它"
+ ],
  "categories": {
   "结构退化": {
    "sub": [
