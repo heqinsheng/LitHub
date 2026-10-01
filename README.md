@@ -272,7 +272,7 @@ python3 scripts/link_markdown.py                          # 挂链接附件
 
 ### 更早
 
-上一次发布是 **2026-09-29**。再往前只有 git 历史（`git log`）。
+上一次发布是 **2026-09-22**。再往前只有 git 历史（`git log`）。
 
 ## 许可
 
