@@ -83,12 +83,16 @@ S 是连续相似度），换机器跑要按 --diag-cats 的输出复核一遍�
   - 检索/摘要/OA 链接全部走免费接口（Crossref / Semantic Scholar / Unpaywall）
   - 只有「标题+摘要翻译」这一步调用 LLM，且关闭思考链；按 TRANS_CHUNK（默认 4）篇
     一块发请求、每块最多 TRANS_RETRY（默认 3）次重试，每块成功即落盘
+  - **后端可选**：默认走 Kimi 会员月付（config/runtime.json 的 llm.digest_provider，
+    需 state/kimi_code_key），失败自动退回 DeepSeek 按量计费；两条通道的译文共用同一份
+    DOI 缓存，换后端不重译。额度用尽（403）会立即判该后端不可用，不白试三次
   - 库内关联（谁引用了它 / 谁和它同类）纯读本地引文图与分类，零 API 花销
   - S 项的库内向量由 scripts/build_embeddings.py 离线算好（纯本地，零 API 花销），
     日报这边只在线编码候选；缺库索引或 sentence-transformers 时回补权重、照常出报
-  - 按左一档模型（空闲时段 输入 1 元/M、输出 4 元/M）实测：旧版一次请求翻 16 篇约
-    输入 3.9K / 输出 3.6K tokens ≈ 1.8 分/天；分块 + 中文概述实测 输入 3.75K /
-    输出 4.17K ≈ 2.0 分/天（见 logs/daily_digest.log 的「翻译第 i/n 块」行）
+  - DeepSeek 按左一档模型（空闲时段 输入 1 元/M、输出 4 元/M）实测：旧版一次请求翻
+    16 篇约输入 3.9K / 输出 3.6K tokens ≈ 1.8 分/天；分块 + 中文概述实测 输入 3.75K /
+    输出 4.17K ≈ 2.0 分/天（见 logs/daily_digest.log 的「翻译第 i/n 块」行）；
+    Kimi 月付通道只吃订阅额度，日报里按边际 0 元记，用量仍在同一行日志里
   - 所有原始响应与译文都带磁盘缓存，同一刷新周期内重跑零网络零花销。译文缓存在
     state/work/cache_translate_v2.json：zh_summary 从「2–3 句概述」改成 90–150 字
     提要后 v1 的概述不再符合新语义，故换名重译一次（实测约 0.15 元，见 TRANS_CACHE）
@@ -620,6 +624,8 @@ TRANS_BACKOFF = 4.0
 
 # DeepSeek 价目（元/百万 token），空闲时段、左一档模型：缓存命中 0.02 / 未命中 1.0 /
 # 输出 4.0。高峰时段是这套的 2 倍。价格变了改这里，日报「统计口径」按它算翻译花销。
+# ⚠️ 只对**走了 DeepSeek 的块**计价：Kimi 月付通道吃的是订阅额度，没有 per-token 价，
+# 在日报里按「边际 0 元」记（用量仍逐块打进日志，好对着 Console 核对额度）。
 PRICE_IN_HIT = 0.02
 PRICE_IN_MISS = 1.0
 PRICE_OUT = 4.0
@@ -649,26 +655,140 @@ def usage_split(u):
     return pin, hit, u.get("completion_tokens", 0) or 0
 
 
-def translate(items, model, log):
-    """分块翻译标题与摘要，并生成 90–150 字中文提要；返回 (zh, 新译篇数, 失败篇数, 本次花费)。
+# ── 翻译后端：Kimi 会员月付（首选）/ DeepSeek 按量计费（兜底）──────────────
+# 首选由 config/runtime.json 的 llm.digest_provider 决定，失败自动改用另一个后端。
+# 两条通道的差异只有三处（URL、鉴权、请求体里各家的私有字段），所以其余逻辑共用。
+KIMI_KEY_FILE = STATE / "kimi_code_key"
+KIMI_CHAT_URL = "https://api.kimi.com/coding/v1/chat/completions"
+DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
+# 本次运行内被判定不可用的后端：{名字: 失败原因}。判死之后不再尝试——一次批里几十篇，
+# 每块先撞一次墙的代价很实在。不落盘：下次运行仍会先试首选（额度可能已恢复）。
+_DEAD = {}
 
-    坏响应只影响本块：某块 3 次都失败时其余块照常落盘，日报里那 4 篇退回英文。
-    缓存是 TRANS_CACHE（cache_translate_v2.json），键为 DOI。
-    """
-    if not items:
-        return {}, 0, 0, 0.0
+
+def deepseek_key():
+    """`~/.kimi-code/config.toml` 里 `[providers.deepseek].api_key`；读不到返回空串。"""
     try:
         import tomllib
-        cfg = tomllib.loads((Path.home() / ".kimi-code" / "config.toml").read_text(encoding="utf-8"))
-        key = cfg["providers"]["deepseek"]["api_key"]
-    except Exception as e:
-        log(f"  翻译跳过：读不到 DeepSeek key（{e}）")
-        return {}, 0, len(items), 0.0
+        cfg = tomllib.loads((Path.home() / ".kimi-code" / "config.toml")
+                            .read_text(encoding="utf-8"))
+        return (cfg["providers"]["deepseek"]["api_key"] or "").strip()
+    except Exception:
+        return ""
+
+
+def kimi_key():
+    """`state/kimi_code_key`（Kimi Code Console 创建的 API Key，chmod 600）。
+
+    不用 kimi CLI 那份 OAuth 令牌：刷新由 CLI 内部管，脚本外没有任何承诺，
+    过期后只会拿到 401。官方给第三方工具的正路就是 Console 的 API Key，且与会员额度同源。
+    """
+    try:
+        return KIMI_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def llm_providers(ds_model, log):
+    """本次运行的翻译后端列表（首选在前）：[{name,url,key,model,extra}]。
+
+    读不到某个后端的凭证就跳过它并记一行日志——Kimi 没配 key 时整期退回 DeepSeek，
+    两个都没有才由调用方判「跳过翻译」。
+    """
+    primary = _rt.LLM["digest_provider"]
+    order = ["kimi", "deepseek"] if primary == "kimi" else ["deepseek", "kimi"]
+    out = []
+    for name in order:
+        if name == "kimi":
+            key = kimi_key()
+            if not key:
+                log(f"  ! 日报翻译：{'首选' if primary == 'kimi' else '兜底'}后端 Kimi 不可用"
+                    f"——读不到 {KIMI_KEY_FILE.relative_to(ROOT)}"
+                    f"（在 Kimi Code Console 建 API Key 后写入该文件、chmod 600）")
+                continue
+            model = _rt.LLM["digest_kimi_model"]
+            # k3 系支持顶层 reasoning_effort；翻译是简单任务，压到 low 省额度。
+            # 其它档位（kimi-for-coding 等）不认这个参数，一律不发。
+            extra = {"reasoning_effort": "low"} if model.startswith("k3") else {}
+            out.append({"name": "kimi", "url": KIMI_CHAT_URL, "key": key,
+                        "model": model, "extra": extra})
+        else:
+            key = deepseek_key()
+            if not key:
+                log("  ! 日报翻译：读不到 DeepSeek key"
+                    "（~/.kimi-code/config.toml 的 [providers.deepseek]）")
+                continue
+            out.append({"name": "deepseek", "url": DEEPSEEK_CHAT_URL, "key": key,
+                        "model": ds_model, "extra": {}})
+    return out
+
+
+def chat_body(p, sys_p, chunk):
+    """拼一个后端一次请求的 body（各家字段差异只在这里）。"""
+    body = {
+        "model": p["model"],
+        "messages": [{"role": "system", "content": sys_p},
+                     {"role": "user", "content": json.dumps(
+                         [{"i": x["doi"], "title": x["title"],
+                           "abstract": x["abstract"][:2600]} for x in chunk],
+                         ensure_ascii=False)}],
+        "max_tokens": 16000, "stream": False,
+    }
+    body.update(p["extra"])
+    if p["name"] == "deepseek":
+        # DeepSeek 私有：thinking 关掉思考链；temperature 0.2 求稳定。
+        # Kimi 那边不能照抄——k3 系只接受 temperature=1，带 0.2 会直接 400。
+        body["thinking"] = {"type": "disabled"}
+        body["temperature"] = 0.2
+    return json.dumps(body).encode()
+
+
+class BackendDead(Exception):
+    """401/403 这类「重试也没用」的失败（认证错 / 额度用尽）：立即判死，不再重试。"""
+
+
+def chat_once(p, body):
+    """发一次请求并解析 JSON 响应（重试与落盘由 translate() 负责）。"""
+    req = urllib.request.Request(p["url"], data=body,
+                                headers={"Authorization": "Bearer " + p["key"],
+                                         "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        # 实测 Kimi 额度用尽是 403 + {"error":{"type":"access_terminated_error", …}}；
+        # 401/403 与含 quota/authentication 字样的都属于「本轮再怎么试都没用」
+        if e.code in (401, 403) or re.search(r"quota|usage limit|authentication",
+                                             detail, re.I):
+            raise BackendDead(f"HTTP {e.code} {detail}") from e
+        raise RuntimeError(f"HTTP {e.code} {detail}") from e
+
+
+def translate(items, model, log):
+    """分块翻译标题与摘要，并生成 90–150 字中文提要。
+
+    返回 (zh, 新译篇数, 失败篇数, DeepSeek 部分花费, 后端用量统计)。
+
+    后端按 config/runtime.json 的 llm.digest_provider 定首选，失败自动换另一个；某后端
+    在一轮里连 TRANS_RETRY 次都失败就判死、本轮不再尝试它（日志写明）。坏响应只影响
+    本块：某块所有后端都失败时其余块照常落盘，日报里那几篇退回英文。
+    缓存是 TRANS_CACHE（cache_translate_v2.json），键为 DOI——**与后端无关**，
+    换后端不会重译已有译文。
+    """
+    if not items:
+        return {}, 0, 0, 0.0, {}
+    provs = llm_providers(model, log)
+    if not provs:
+        log("  翻译跳过：Kimi 与 DeepSeek 两条通道都拿不到凭证")
+        return {}, 0, len(items), 0.0, {}
+    _DEAD.clear()
 
     cache_path = TRANS_CACHE
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     todo = [x for x in items if x["doi"] not in cache]
     n_failed = 0
+    n_by = Counter()
     if todo:
         sys_p = ("你是锂电正极材料的科技翻译。输入是 JSON 数组，每项含 i(标识) / title / abstract。"
                  "输出严格 JSON 数组，每项 {i, zh_title, zh_abstract, zh_summary}："
@@ -683,53 +803,57 @@ def translate(items, model, log):
         chunks = [todo[i:i + TRANS_CHUNK] for i in range(0, len(todo), TRANS_CHUNK)]
         n_done, cost = 0, 0.0
         for ci, chunk in enumerate(chunks, 1):
-            body = json.dumps({
-                "model": model,
-                "thinking": {"type": "disabled"},
-                "messages": [{"role": "system", "content": sys_p},
-                             {"role": "user", "content": json.dumps(
-                                 [{"i": x["doi"], "title": x["title"],
-                                   "abstract": x["abstract"][:2600]} for x in chunk],
-                                 ensure_ascii=False)}],
-                "max_tokens": 16000, "temperature": 0.2, "stream": False,
-            }).encode()
-            got = None
-            for attempt in range(1, TRANS_RETRY + 1):
-                t0 = time.time()
-                try:
-                    req = urllib.request.Request(
-                        "https://api.deepseek.com/chat/completions", data=body,
-                        headers={"Authorization": "Bearer " + key,
-                                 "Content-Type": "application/json"})
-                    with urllib.request.urlopen(req, timeout=300) as r:
-                        resp = json.load(r)
-                    if "choices" not in resp:
-                        raise RuntimeError("响应里没有 choices："
-                                           + json.dumps(resp, ensure_ascii=False)[:200])
-                    txt = resp["choices"][0]["message"]["content"].strip()
-                    txt = re.sub(r"^```(?:json)?|```$", "", txt, flags=re.M).strip()
-                    got = json.loads(txt)
-                    u = resp.get("usage", {})
-                    pin, phit, pout = usage_split(u)
-                    c = usage_cost(u)
-                    cost += c
-                    log(f"  翻译第 {ci}/{len(chunks)} 块 {len(chunk)} 篇：{time.time()-t0:.1f}s，"
-                        f"输入 {pin}（缓存命中 {phit}）"
-                        f" / 输出 {pout} tokens ≈ {c:.4f} 元")
+            got, used, last_err = None, "", ""
+            for p in provs:
+                if p["name"] in _DEAD:
+                    last_err = f"{p['name']} 本轮已判不可用（{_DEAD[p['name']]}）"
+                    continue
+                body = chat_body(p, sys_p, chunk)
+                for attempt in range(1, TRANS_RETRY + 1):
+                    t0 = time.time()
+                    try:
+                        resp = chat_once(p, body)
+                        if "choices" not in resp:
+                            raise RuntimeError("响应里没有 choices："
+                                               + json.dumps(resp, ensure_ascii=False)[:200])
+                        txt = resp["choices"][0]["message"]["content"].strip()
+                        txt = re.sub(r"^```(?:json)?|```$", "", txt, flags=re.M).strip()
+                        got = json.loads(txt)
+                        u = resp.get("usage", {})
+                        pin, phit, pout = usage_split(u)
+                        c = usage_cost(u) if p["name"] == "deepseek" else 0.0
+                        cost += c
+                        used = p["name"]
+                        log(f"  翻译第 {ci}/{len(chunks)} 块 {len(chunk)} 篇"
+                            f"（{p['name']}）：{time.time()-t0:.1f}s，"
+                            f"输入 {pin}（缓存命中 {phit}）"
+                            f" / 输出 {pout} tokens"
+                            + (f" ≈ {c:.4f} 元" if p["name"] == "deepseek"
+                               else "（月付额度内，边际 0 元）"))
+                        break
+                    except BackendDead as e:
+                        last_err = f"{type(e).__name__} {e}"
+                        log(f"  ! 翻译后端 {p['name']} 判不可用（{last_err[:160]}），"
+                            f"不再重试")
+                        break
+                    except Exception as e:
+                        last_err = f"{type(e).__name__} {e}"
+                        if attempt < TRANS_RETRY:
+                            wait = TRANS_BACKOFF * attempt
+                            log(f"  ! 翻译第 {ci}/{len(chunks)} 块 {p['name']} 第 {attempt} "
+                                f"次失败（{last_err}），{wait:.0f}s 后重试")
+                            time.sleep(wait)
+                if got is not None:
                     break
-                except Exception as e:
-                    msg = f"{type(e).__name__} {e}"
-                    if attempt < TRANS_RETRY:
-                        wait = TRANS_BACKOFF * attempt
-                        log(f"  ! 翻译第 {ci}/{len(chunks)} 块第 {attempt} 次失败"
-                            f"（{msg}），{wait:.0f}s 后重试")
-                        time.sleep(wait)
-                    else:
-                        log(f"  ! 翻译第 {ci}/{len(chunks)} 块 {TRANS_RETRY} 次均失败"
-                            f"（{msg}），本块 {len(chunk)} 篇退回英文")
+                _DEAD[p["name"]] = last_err[:160]
+                log(f"  ! 翻译后端 {p['name']} 在第 {ci} 块失败"
+                    f"（{last_err[:120]}）；本轮余下各块不再尝试它")
             if got is None:
+                log(f"  ! 翻译第 {ci}/{len(chunks)} 块所有后端均失败"
+                    f"（最后错误：{last_err}），本块 {len(chunk)} 篇退回英文")
                 n_failed += len(chunk)
                 continue
+            n_by[used] += 1
             for e in got:
                 i = str(e.get("i") or "").strip()
                 if not i:
@@ -739,14 +863,17 @@ def translate(items, model, log):
                             "zh_summary": e.get("zh_summary") or ""}
                 n_done += 1
             cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-        log(f"  翻译落盘 {n_done} 篇（共 {len(chunks)} 块，失败 {n_failed} 篇），"
-            f"本次约 {cost:.4f} 元（空闲时段价，高峰翻倍）")
+        log(f"  翻译落盘 {n_done} 篇（共 {len(chunks)} 块，失败 {n_failed} 篇）："
+            + "、".join(f"{k} {v} 块" for k, v in n_by.most_common())
+            + f"，DeepSeek 部分约 {cost:.4f} 元（空闲时段价，高峰翻倍）")
     else:
         log(f"  翻译全部命中缓存（{len(items)} 篇），本次零 LLM 花销")
         cost = 0.0
 
-    used = {x["doi"]: cache.get(x["doi"], {}) for x in items}
-    return used, len(todo) - n_failed, n_failed, cost
+    used_map = {x["doi"]: cache.get(x["doi"], {}) for x in items}
+    stats = {"blocks": dict(n_by), "dead": dict(_DEAD),
+             "primary": provs[0]["name"], "cost": cost}
+    return used_map, len(todo) - n_failed, n_failed, cost, stats
 
 
 # ---------------------------------------------------------------- 主流程
@@ -1863,10 +1990,12 @@ def main():
             f" X={r['X']:.2f} J'={r['J']:+.2f} A={r['A']:.0f} F={r['F']:.2f}"
             f" 被引={r['cited']} -> {r['score']:.3f}  {r['title'][:64]}")
 
-    # 翻译（唯一花钱的一步）
+    # 翻译（唯一花钱的一步；后端按 config/runtime.json 的 llm.digest_provider 定，
+    # Kimi 月付优先、失败自动退回 DeepSeek）
     zh, n_zh, n_zh_fail, zh_cost = {}, 0, 0, 0.0
+    zh_stats = {}
     if not a.no_llm:
-        zh, n_zh, n_zh_fail, zh_cost = translate(picked, a.model, log)
+        zh, n_zh, n_zh_fail, zh_cost, zh_stats = translate(picked, a.model, log)
     else:
         log("  --no-llm：跳过翻译，零花销")
 
@@ -1891,12 +2020,16 @@ def main():
              f"> 分类依据《文献画像》（库内 {len(lib_titles)} 条标题 / {len(lib_dois)} 个 DOI）"
              f"自动判定；引文推荐来自库内 {n_citers} 篇的参考文献\n"]
     if not a.no_llm:
+        by = zh_stats.get("blocks") or {}
+        prov_note = "、".join(f"{k} {v} 块" for k, v in by.items()) or "全部命中缓存"
         stats.append(f"> 翻译：本次新译 {n_zh} 篇、命中缓存 "
                      f"{len(picked) - n_zh - n_zh_fail} 篇、失败 {n_zh_fail} 篇，"
-                     f"约 {zh_cost:.4f} 元"
-                     f"（分块 {TRANS_CHUNK} 篇/请求，重试至多 {TRANS_RETRY} 次；"
-                     f"空闲时段价 命中 {PRICE_IN_HIT} / 未命中 {PRICE_IN_MISS} / "
-                     f"输出 {PRICE_OUT} 元每百万 token）\n")
+                     f"后端 {prov_note}"
+                     + (f"，DeepSeek 部分约 {zh_cost:.4f} 元"
+                        f"（空闲时段价 命中 {PRICE_IN_HIT} / 未命中 {PRICE_IN_MISS} / "
+                        f"输出 {PRICE_OUT} 元每百万 token）"
+                        if zh_cost > 0 else "（Kimi 月付额度内，无按量花费）")
+                     + f"；分块 {TRANS_CHUNK} 篇/请求，重试至多 {TRANS_RETRY} 次\n")
     stats.append("\n### 概览\n\n| 一级分类 | 篇数 |\n|---|---:|\n")
     for c in CAT_ORDER:
         if by_cat.get(c):

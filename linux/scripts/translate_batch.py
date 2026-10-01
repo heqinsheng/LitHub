@@ -32,13 +32,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # 与 stdout 编码兜底。zapi 在 import 阶段不发请求、不读密钥。
 import zapi  # noqa: F401
 import sync_properties as sp
+import llm_router as llm
 
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 WORKROOT = os.path.join(ROOT, "state", "work", "translate")
 TEMPLATE = os.path.join(ROOT, "prompts", "translate_full.md")
 AGENT_FILE = os.path.join(ROOT, "prompts", "translator.agent.md")
-KIMI = os.environ.get("LITHUB_KIMI") or os.path.expanduser("~/.kimi-code/bin/kimi")
 
 OUT = "全文翻译（含批注）.md"
 MIN_SRC = 800          # 比这还小的 paper.md 不是一篇文章
@@ -426,21 +426,21 @@ def build_base(tpl, key, seg_table):
 # ────────────────────────────────────────────── 跑 kimi 与用量
 
 def run_kimi(prompt, cwd, timeout):
-    """跑一次 kimi -p，返回 (是否拿到会话 id, stdout, stderr, session_id)。
+    """跑一次 kimi -p，返回 (是否拿到会话 id, stdout, stderr, session_id, 实际用的模型)。
 
     带 `--output-format stream-json`：它不是给解析正文用的（正文由模型写文件），
     而是为了从 `session.resume_hint` 那行拿到 session_id —— 有了它才能去
     `~/.kimi-code/sessions/*/<sid>/agents/*/wire.jsonl` 里读真实用量。
+
+    模型由 llm_router 决定：默认走 config/runtime.json 的 llm.model（Kimi 月付额度），
+    失败（没额度 / 限流 / 认证错）自动改用 llm.fallback_model。
     """
-    # --agent-file 必须用 = 形式且放在 -p 之前：-p 自己吃下一个参数当提示词，
+    # --agent-file 必须放在 -p 之前：-p 自己吃下一个参数当提示词，
     # 写成「-p --agent-file X」会让 X 被当成子命令（实测报 unknown command）。
-    cmd = [KIMI, f"--agent-file={AGENT_FILE}", "-p", prompt,
-           "--output-format", "stream-json"]
-    try:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, "", f"TIMEOUT（{timeout // 60} 分钟）", ""
+    args = [f"--agent-file={AGENT_FILE}", "-p", prompt, "--output-format", "stream-json"]
+    r, used, note = llm.run_kimi_cli(args, cwd=cwd, timeout=timeout, log=log)
+    if r is None:
+        return False, "", f"TIMEOUT（{timeout // 60} 分钟）", "", used
     sid = ""
     for ln in r.stdout.splitlines():
         ln = ln.strip()
@@ -452,7 +452,7 @@ def run_kimi(prompt, cwd, timeout):
             continue
         if isinstance(o, dict) and o.get("type") == "session.resume_hint":
             sid = o.get("session_id") or ""
-    return True, r.stdout, (r.stderr or "")[-400:], sid
+    return True, r.stdout, (r.stderr or "")[-400:], sid, used
 
 
 def session_usage(sids):
@@ -660,14 +660,16 @@ def run_one(key, tpl, a, dry):
     def job(t):
         name, path, prompt = t
         t0 = time.time()
-        ok, so, se, sid = run_kimi(prompt, d, a.timeout)
+        ok, so, se, sid, used = run_kimi(prompt, d, a.timeout)
         dt = time.time() - t0
+        at = f"@{used}" if used else ""
         if not ok:
             return name, f"TIMEOUT（{se}）", 0, sid, False
         moved = collect_output(path, d, name)
         if not os.path.exists(path) or os.path.getsize(path) < MIN_PART:
             return name, f"FAIL（没拿到 {name}.md；末行：{tail_msg(so, se)}）", dt, sid, False
-        return name, f"ok（{os.path.getsize(path)} 字节，{dt/60:.1f} 分）{moved}", dt, sid, True
+        return name, f"ok{at}（{os.path.getsize(path)} 字节，{dt/60:.1f} 分）{moved}", \
+            dt, sid, True
 
     usage, bad, t0 = [], 0, time.time()
     with ThreadPoolExecutor(max_workers=a.jobs) as ex:

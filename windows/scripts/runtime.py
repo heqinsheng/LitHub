@@ -14,6 +14,10 @@ runtime.json 里写明分类名。
     scoring   打分权重与各分量常数（daily_digest.py 的 W_R…C_AGE_TAU_Y；
               w_o / o_ref_floor / o_sat 是 score_library.py 出度项 O 的参数，
               不参与权重归一化）
+    llm       LLM 后端：三个批处理脚本走 kimi CLI 的模型（model / fallback_model，
+              空串 = 不发 -m、用 ~/.kimi-code/config.toml 的 default_model）与日报翻译
+              的首选后端（digest_provider / digest_kimi_model）。默认值即换后端之前
+              的行为，所以发布包里的用户不受影响。
     email     日报发信（scripts/send_digest.py）：收件人 / SMTP 主机端口 / 主题模板。
               **密码不在这个文件里**——读 state/smtp_password（chmod 600），
               因为这个 json 是要进复现包给别人的。
@@ -22,7 +26,7 @@ runtime.json 里写明分类名。
     import runtime as R
     R.SCHEDULE["every_n_days"]    R.DIGEST["limit"]
     R.POOL["refresh_days"]        R.SCORING["w_r"]
-    R.EMAIL["to"]                 R.EMAIL["smtp_host"]
+    R.LLM["model"]                R.EMAIL["smtp_host"]
     R.WARNINGS                    # 校验通过、但值得提醒的问题（权重不变量之类）
 
 文件缺失**不算错误**：用内置 DEFAULTS 并把 LOADED 置 False（存在且解析成功才 True），
@@ -97,6 +101,15 @@ DEFAULTS = {
         "citer_boost": 2.0,
         "score_mult": 1.3,
     },
+    # LLM 后端：批处理脚本（summarize/translate/embed_figures，走 kimi CLI）与日报翻译
+    # （daily_digest.py 的 translate()，裸 HTTP）分别的「首选 + 兜底」。默认值 = 换后端
+    # 之前的行为（不发 -m、日报走 DeepSeek），对发布包零行为变化。
+    "llm": {
+        "model": "",
+        "fallback_model": "",
+        "digest_provider": "deepseek",
+        "digest_kimi_model": "kimi-for-coding",
+    },
 }
 
 # 字段表 {段: {键: (类型, 下限, 上限)}}，None = 该侧不限。键名即白名单：不在这里的键一律报错。
@@ -110,6 +123,12 @@ _SCHEMA = {
     "seed": {
         "citer_boost": ("float", 0.0, None),
         "score_mult": ("float", 0.0, None),
+    },
+    "llm": {
+        "model": ("str", None, None),
+        "fallback_model": ("str", None, None),
+        "digest_provider": ("str", None, None),
+        "digest_kimi_model": ("str", None, None),
     },
     "digest": {
         "limit": ("int", 1, None),
@@ -236,6 +255,11 @@ def _load():
     if s["w_s"] > s["w_r"]:
         warn.append(f"scoring 的 w_s={s['w_s']:.3f} > w_r={s['w_r']:.3f}：有 S 时 R 的份额是 "
                     f"w_r−w_s={s['w_r'] - s['w_s']:.3f}，已经归零或为负，请保证 w_s ≤ w_r")
+    # digest_provider 只有两种合法取值；认错名字会让人以为换了后端、其实没换
+    dp = cfg["llm"]["digest_provider"]
+    if dp not in ("kimi", "deepseek"):
+        raise ValueError(f"{PATH} 的 llm.digest_provider 只能是 \"kimi\" 或 \"deepseek\"，"
+                         f"实际是 {dp!r}")
     return cfg, warn, loaded
 
 
@@ -246,6 +270,7 @@ DIGEST = _cfg["digest"]
 POOL = _cfg["pool"]
 SCORING = _cfg["scoring"]
 SEED = _cfg["seed"]
+LLM = _cfg["llm"]
 EMAIL = _cfg["email"]
 
 

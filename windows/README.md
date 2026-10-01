@@ -22,7 +22,8 @@
 | 收编 PDF     | `intake_pdfs.py`                         | 按首页 DOI 匹配库里条目，缺则用 CrossRef 建条目，三段式上传 PDF 到 Zotero               |
 | 转 Markdown | `mineru_batch.py`                        | 调 MinerU 精准模式，产出 `paper.md` + `images/`（公式、表格、图都保留）              |
 | 中文总结       | `summarize_batch.py`                     | 每篇一个独立 LLM 会话，按 `prompts/summarize.md` 模板写 `summary.md`          |
-| 挂回 Zotero  | `link_markdown.py`                       | 把 `paper.md` / `summary.md` 作为 linked_file 附件挂到条目上（Obsidian 也能读） |
+| 全文翻译       | `translate_batch.py`                     | 逐段中文翻译 + 批判性批注，产出 `全文翻译（含批注）.md`（可选，按需跑）                     |
+| 挂回 Zotero  | `link_markdown.py`                       | 把上述 md 作为 linked_file 附件挂到条目上（Obsidian 也能读）                       |
 | 分类与标签      | `apply_to_zotero.py`                     | 按 `classification.json` 写入分类目录与各标签轴                              |
 | 主动检索       | `find_new.py`                            | 按库内分类检索库外新文献，产出候选清单                                              |
 | 每日文献日报     | `daily_digest.py`                        | 三个通道取候选，按打分公式选出 N 篇，产出 `文献日报/YYYY-MM-DD.md` 与 `.urls.txt`        |
@@ -47,12 +48,13 @@ LitHub 会继续往下走：读全文 → 写中文总结 → 按你自己的分
 每个脚本都是「做完的跳过、断点续跑」。日报的成本大头是网络请求，靠分级缓存把重跑变成零网络；
 总结的模型调用按 DOI 缓存，重跑零花销。
 
-**④ 有零 token 的部分。**
+**④ 有零 token 的部分，花钱的部分也能换后端。**
 文献画像（时间趋势、方法学缺项、被引网络）和库内「推荐分」都是纯统计 + 免费接口，不调 LLM。
-真正花钱的只有日报翻译（约 2 分/天）和逐篇中文总结。
+真正花钱的只有日报翻译（约 2 分/天）和逐篇中文总结——两者都能改挂 **Kimi 会员月付额度**
+（`config/runtime.json` 的 `llm` 段，换过去不产生按量费用，失败自动退回按量计费的 DeepSeek）。
 
 **⑤ 文档密度。**
-`帮助手册.md` 2200+ 行 + `AGENTS.md` + `docs/设计决策与实测记录.md`，里面是一份**踩坑实录**，不是功能介绍：
+`帮助手册.md` 2800 行 + `AGENTS.md` + `docs/设计决策与实测记录.md`，里面是一份**踩坑实录**，不是功能介绍：
 MinerU 的 401 token 报错文案不可信（真因通常是复制的 key 不完整）、
 Zotero 本地 API 写条目时字段**必须平铺**否则 HTTP 200 但静默不改、
 IPv6 黑洞会让同一个请求从 0.7 秒变成 181 秒……
@@ -127,7 +129,8 @@ LLM CLI、Zotero 本地 API、写授权密钥，并做一次**中文编码自检
 | Zotero 本地 API 的坑 | `帮助手册.md` §7                     |
 | MinerU 转换的坑      | `帮助手册.md` §8                     |
 | 出错了              | `帮助手册.md` §10 故障速查               |
-| 项目内部约定与执行规则      | `AGENTS.md`（AI 代理常驻，约 32 KB）      |
+| 项目内部约定与执行规则      | `AGENTS.md`（AI 代理常驻，约 155 行 / 7.6 KB）      |
+| 库结构：归档 / 备用库 / 标签轴 | `帮助手册.md` §7.13–§7.14              |
 | 为什么这么写、实测数据、历史坑 | `docs/设计决策与实测记录.md`              |
 
 **前置**（详见手册 §3）：Python 3.12+（无第三方包）、Zotero 桌面版保持运行并打开

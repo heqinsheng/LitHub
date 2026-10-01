@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sync_properties as sp
+import llm_router as llm
 
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
@@ -29,7 +30,8 @@ TEMPLATE_REVIEW = os.path.join(ROOT, "prompts", "summarize_review.md")
 # 备用库（topic.json 的 backup_collections）的极简模板：正文只喂摘要+结论、只要求
 # 一句话结论+要点。由 manifest 记录的 backup 标记选中，不看 classification.json。
 TEMPLATE_BACKUP = os.path.join(ROOT, "prompts", "summarize_backup.md")
-KIMI = os.environ.get("LITHUB_KIMI") or os.path.expanduser("~/.kimi-code/bin/kimi")
+# kimi 可执行文件与「用哪个模型 / 失败怎么兜底」都归 llm_router 管
+# （它读 LITHUB_KIMI 与 config/runtime.json 的 llm 段）。
 
 FIGURES = "--figures" in sys.argv
 FORCE = "--force" in sys.argv
@@ -883,17 +885,18 @@ def summarize(rec, items, ab, tpls):
     # ── inline / file：模型只回正文（不写文件），脚本落盘 ─────────────
     if mode in ("inline", "file"):
         agent = ONESHOT_AGENT if mode == "inline" else ONESHOT_READ_AGENT
-        cmd = [KIMI, f"--agent-file={agent}", "-p", prompt,
-               "--output-format", "stream-json"]
-        body, miss = "", []
+        args = [f"--agent-file={agent}", "-p", prompt,
+                "--output-format", "stream-json"]
+        body, miss, used = "", [], ""
         try:
             for attempt in (1, 2):       # 缺节就重试一次：同一份提示词再跑一遍即可
-                try:
-                    r = subprocess.run(cmd, cwd=d, capture_output=True,
-                                       text=True, encoding="utf-8", errors="replace",
-                                       timeout=2400, env=env)
-                except subprocess.TimeoutExpired:
+                # 模型由 llm_router 决定（默认走 config/runtime.json 的 llm.model，
+                # 失败自动换 llm.fallback_model）；返回 None = 超时
+                r, used, note = llm.run_kimi_cli(args, cwd=d, timeout=2400, env=env, log=log)
+                if r is None:
                     return key, "TIMEOUT", time.time() - t0
+                if note:
+                    log(f"  ! {key} 模型调用失败（{note}）")
                 body = clean_body(parse_stream_json(r.stdout))
                 miss = (missing_sections(body, sections)
                         if len(body) > MIN_BODY else ["正文过短"])
@@ -906,7 +909,8 @@ def summarize(rec, items, ab, tpls):
                 os.remove(tmp)            # 临时全文用完即删，不留残骸
         if len(body) > MIN_BODY:
             write_summary(summ, old, body, item, ab)
-            tag = f"{mode},裁剪{prune_note}" + (f",缺{'/'.join(miss)}" if miss else "")
+            at = f"@{used}" if used else ""
+            tag = f"{mode},裁剪{prune_note}{at}" + (f",缺{'/'.join(miss)}" if miss else "")
             return key, f"ok({tag})", time.time() - t0
         if backup:
             # 备用库不能退到工具模式：工具模式注入的是「去读 paper.md 全文」，与极简模板
@@ -918,16 +922,14 @@ def summarize(rec, items, ab, tpls):
         t0 = time.time()
 
     # ── 工具模式（兜底，或 --no-oneshot 强制）────────────────────────
-    try:
-        # --agent-file 必须放在 -p 之前，且用 = 形式：-p 自己吃下一个参数当提示词，
-        # 写成「-p --agent-file X」会让 X 变成子命令（实测报 unknown command）
-        cmd = [KIMI] + ([f"--agent-file={AGENT_FILE}"] if AGENT_FILE else []) + \
-              ["-p", prompt]
-        r = subprocess.run(cmd, cwd=d, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace",
-                           timeout=2400, env=env)
-    except subprocess.TimeoutExpired:
+    # --agent-file 必须放在 -p 之前：-p 自己吃下一个参数当提示词，
+    # 写成「-p --agent-file X」会让 X 变成子命令（实测报 unknown command）
+    args = ([f"--agent-file={AGENT_FILE}"] if AGENT_FILE else []) + ["-p", prompt]
+    r, used, note = llm.run_kimi_cli(args, cwd=d, timeout=2400, env=env, log=log)
+    if r is None:
         return key, "TIMEOUT", time.time() - t0
+    if note:
+        log(f"  ! {key} 模型调用失败（{note}）")
     if os.path.exists(summ) and os.path.getsize(summ) > 600:
         # 撞上 --max-steps 时模型可能一步都没走完，文件还是旧的那份——
         # 不能把旧内容当新结果报 ok，否则上限设太小会静默产出「什么都没变」
@@ -937,7 +939,8 @@ def summarize(rec, items, ab, tpls):
         body = sp.split_fm(new)[1]
         write_summary(summ, old, body, item, ab)
         miss = missing_sections(body, sections)
-        return key, "ok" + (f"(缺{'/'.join(miss)})" if miss else ""), time.time() - t0
+        at = f"@{used}" if used else ""
+        return key, f"ok{at}" + (f"(缺{'/'.join(miss)})" if miss else ""), time.time() - t0
     tail = (r.stdout + r.stderr).strip().split("\n")[-1:] or ["?"]
     return key, f"FAIL({tail[0][:60]})", time.time() - t0
 

@@ -128,23 +128,40 @@ EMAIL_PLACEHOLDER = {
     "smtp_user": "you@example.com",
 }
 
+# 发布包里 llm 段一律回到「换后端之前」的默认值。与 email 同理：作者本机把三个
+# 批处理脚本与日报翻译挂在 Kimi 月付上（kimi-code/* 别名只存在于作者的
+# ~/.kimi-code/config.toml，别人拿到包里这份配置会直接报「model not configured」），
+# 所以发布侧必须清空，让别的用户沿用他们自己的 CLI default_model 与 DeepSeek。
+LLM_PLACEHOLDER = {
+    "model": "",
+    "fallback_model": "",
+    "digest_provider": "deepseek",
+}
+
 
 def sanitize_runtime(path):
-    """把发布包里 config/runtime.json 的 email 段换成占位符。
+    """把发布包里 config/runtime.json 的 email 段换成占位符、llm 段清回默认。
 
-    只动那几个身份字段，其余原样保留：运行参数（篇数 / 权重 / 池子深度）是作者的
-    实测工作点，本来就该随包发布；发件账号是个人隐私，不该出去。`_help` 的说明也
-    留着——它正是写给拿到包的人看的。
+    只动那两类字段，其余原样保留：运行参数（篇数 / 权重 / 池子深度）是作者的
+    实测工作点，本来就该随包发布；发件账号是个人隐私、LLM 后端是作者本机的选择，
+    都不该出去。`_help` 的说明也留着——它正是写给拿到包的人看的。
     """
     if not path.exists():
         return
     cfg = json.loads(path.read_text(encoding="utf-8"))
+    touched = []
     em = cfg.get("email")
     if isinstance(em, dict):
         em.update(EMAIL_PLACEHOLDER)
+        touched.append("email")
+    llm = cfg.get("llm")
+    if isinstance(llm, dict):
+        llm.update(LLM_PLACEHOLDER)
+        touched.append("llm")
+    if touched:
         path.write_text(json.dumps(cfg, ensure_ascii=False, indent=1) + "\n",
                         encoding="utf-8")
-        print(f"  🔒 已脱敏 {path.relative_to(STAGE)} 的 email 段")
+        print(f"  🔒 已脱敏 {path.relative_to(STAGE)} 的 {'、'.join(touched)} 段")
 
 
 def main():

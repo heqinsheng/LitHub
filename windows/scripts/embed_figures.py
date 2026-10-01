@@ -16,26 +16,29 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # ── 控制台编码兜底 ────────────────────────────────────────────────────
 # Windows 中文控制台的 Python 默认编码是 cp936：print 里的 Å / ö / Π / ✅ 会抛
 # UnicodeEncodeError，输出断在半路。只放宽错误策略、不改 encoding——编不出来时
-# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。本脚本不 import 任何本地模块，
-# 所以自带一份（与 zapi.py 同款）。
+# 退化成 "?"，UTF-8 环境下的输出字节一个都不变。这段自带一份（与 zapi.py 同款），
+# 不从别处 import——它要在 import 任何本地模块**之前**生效。
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(errors="replace")
     except (AttributeError, OSError, ValueError):
         pass
 
+import llm_router as llm   # noqa: E402  （要放在上面那段编码兜底之后）
+
 ROOT = os.path.expanduser("~/LitHub")
 PAPERS = os.path.join(ROOT, "papers")
 MANIFEST = os.path.join(ROOT, "state", "manifest.json")
-KIMI = os.environ.get("LITHUB_KIMI") or os.path.expanduser("~/.kimi-code/bin/kimi")
+# 模型与兜底由 llm_router 从 config/runtime.json 的 llm 段取（不再直接用 KIMI 常量）。
 # 受限 agent（只给 Read/Write）：默认会话把内置工具 + MCP 的全部工具 schema 塞进每次调用，
 # 实测首调未缓存输入 35,441 token，换成 prompts/figures.agent.md 后降到 2,429 token。
 AGENT_FILE = os.path.join(ROOT, "prompts", "figures.agent.md")
@@ -299,15 +302,17 @@ def process(rec):
 
     items = []
     try:
-        try:
-            subprocess.run([KIMI] + ([f"--agent-file={AGENT_FILE}"]
-                                     if os.path.exists(AGENT_FILE) else []) + ["-p", PROMPT],
-                           cwd=run_dir, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=2400)
-        except subprocess.TimeoutExpired:
+        # 模型由 llm_router 决定（config/runtime.json 的 llm.model，失败自动换
+        # llm.fallback_model）；返回 None = 超时
+        args = ([f"--agent-file={AGENT_FILE}"] if os.path.exists(AGENT_FILE) else []) \
+            + ["-p", PROMPT]
+        r, used, note = llm.run_kimi_cli(args, cwd=run_dir, timeout=2400, log=log)
+        if r is None:
             return key, "TIMEOUT", time.time() - t0, []
+        if note:
+            log(f"  ! {key} 模型调用失败（{note}）")
         if not os.path.exists(plan_path):
-            return key, "模型未产出 plan", time.time() - t0, []
+            return key, f"模型未产出 plan（{used or 'CLI 默认模型'}）", time.time() - t0, []
         items = parse_plan(open(plan_path, encoding="utf8", errors="replace").read())
     finally:
         # 清单与模型写的 plan 一起清掉；return 走哪条路都会经过这里
